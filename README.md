@@ -4,7 +4,7 @@ Couch co-op action roguelite for 1–4 players. The Eclipse Maw swallowed the su
 
 ## Open it
 
-1. Install **Unity 6** (6000.0 LTS or newer) from Unity Hub.
+1. Install **Unity 6.3 LTS (6000.3.28f1)** from Unity Hub (newer Unity 6 versions also work).
 2. Clone this repo, then in Unity Hub choose **Add → Add project from disk** and pick the repo folder.
 3. Unity installs the Input System package. If it asks to enable the new input backends, click **Yes** (the Editor restarts).
 4. On first open the project builds `Assets/Lanternfall/Lanternfall.unity` and opens it. If you don't see it, use the **Lanternfall → Open Slice Scene** menu.
