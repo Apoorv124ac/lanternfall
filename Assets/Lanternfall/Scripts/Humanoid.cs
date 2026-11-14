@@ -9,7 +9,7 @@ namespace Lanternfall
     /// <summary>How a character looks. Heroes and the Eclipse cult share one body, dressed differently.</summary>
     public sealed class Look
     {
-        public Color Skin = Util.Hex("#d9a184"), Cloth = Color.gray, Cloth2 = Color.gray, Trim = Color.white, Glow = Color.white, Hair = Util.Hex("#2a1d18"), Eyes = Util.Hex("#1b1424");
+        public Color Skin = Util.Hex("#d9a184"), Cloth = Color.gray, Cloth2 = Color.gray, Trim = Color.white, Glow = Color.white, Hair = Util.Hex("#2a1d18"), Eyes = Util.Hex("#1b1424"), Shoe = Util.Hex("#f2f2f0");
         public bool Robe = true, Hood, Mask, Halo, SpikyHair, Pauldrons, Crown, Goggles, Cape, Horns, Ponytail, Helmet, Vest, Backpack;
         /// <summary>A two-handed firearm carried at the chest (heroes and gunners).</summary>
         public Weapon Gun = Weapon.None;
@@ -114,7 +114,8 @@ namespace Lanternfall
         {
             var L = look;
             float b = L.Bulk;
-            Material skin = Util.Lit(L.Skin), cloth = Util.Lit(L.Cloth), cloth2 = Util.Lit(L.Cloth2), trim = Util.Lit(L.Trim), glow = Util.Glow(L.Glow), hair = Util.Lit(L.Hair), dark = Util.Lit(Util.Hex("#1a1520"));
+            Material skin = Util.Lit(L.Skin), cloth = Util.Lit(L.Cloth), cloth2 = Util.Lit(L.Cloth2), trim = Util.Lit(L.Trim), glow = Util.Glow(L.Glow), hair = Util.Lit(L.Hair), dark = Util.Lit(Util.Hex("#1e1e24")),
+                shoe = Util.Lit(L.Shoe), sock = L.Shoe.grayscale > 0.5f ? Util.Lit(Util.Hex("#f2f2f0")) : cloth2;
 
             rig = Pivot("Rig", transform, Vector3.zero);
             rig.localScale = Vector3.one * L.Height;
@@ -127,10 +128,14 @@ namespace Lanternfall
             legR = Pivot("LegR", hips, new Vector3(0.1f * b, -0.03f, 0));
             foreach (var leg in new[] { legL, legR })
             {
-                Limb(leg, 0.45f, 0.15f * b, cloth2);
+                // cartoon-athlete legs: slim tapered tubes, a knee pad and big chunky sneakers
+                Limb(leg, 0.45f, 0.135f * b, cloth2);
                 var shin = Pivot("Shin", leg, new Vector3(0, -0.45f, 0));
-                Limb(shin, 0.43f, 0.13f * b, dark);
-                Util.Prim(PrimitiveType.Cube, shin, new Vector3(0, -0.45f, 0.05f), new Vector3(0.12f * b, 0.08f, 0.25f), dark);
+                Limb(shin, 0.42f, 0.11f * b, cloth2);
+                Util.Prim(PrimitiveType.Sphere, shin, new Vector3(0, -0.02f, 0.03f), new Vector3(0.14f, 0.12f, 0.12f) * b, dark);       // knee pad
+                Util.Prim(PrimitiveType.Capsule, shin, new Vector3(0, -0.3f, 0), new Vector3(0.115f * b, 0.09f, 0.115f * b), sock);    // sock
+                Util.Prim(PrimitiveType.Cube, shin, new Vector3(0, -0.44f, 0.06f), new Vector3(0.15f * b, 0.1f, 0.3f), shoe);          // sneaker
+                Util.Prim(PrimitiveType.Cube, shin, new Vector3(0, -0.5f, 0.065f), new Vector3(0.155f * b, 0.035f, 0.31f), dark);      // sole
                 if (leg == legL) shinL = shin; else shinR = shin;
             }
             if (L.Robe)
@@ -172,11 +177,10 @@ namespace Lanternfall
             else
             {
                 var eyes = Util.Lit(L.Eyes);
-                Util.Prim(PrimitiveType.Sphere, head, new Vector3(-0.05f, 0.15f, 0.12f), Vector3.one * 0.035f, eyes);
-                Util.Prim(PrimitiveType.Sphere, head, new Vector3(0.05f, 0.15f, 0.12f), Vector3.one * 0.035f, eyes);
-                Util.Prim(PrimitiveType.Cube, head, new Vector3(-0.05f, 0.19f, 0.12f), new Vector3(0.05f, 0.012f, 0.01f), hair); // brows
-                Util.Prim(PrimitiveType.Cube, head, new Vector3(0.05f, 0.19f, 0.12f), new Vector3(0.05f, 0.012f, 0.01f), hair);
-                Util.Prim(PrimitiveType.Sphere, head, new Vector3(0, 0.12f, 0.13f), new Vector3(0.03f, 0.04f, 0.03f), skin); // nose
+                // simple cartoon face: dot eyes and a heavy brow; the hair silhouette carries the personality
+                Util.Prim(PrimitiveType.Sphere, head, new Vector3(-0.05f, 0.15f, 0.12f), new Vector3(0.025f, 0.035f, 0.02f), eyes);
+                Util.Prim(PrimitiveType.Sphere, head, new Vector3(0.05f, 0.15f, 0.12f), new Vector3(0.025f, 0.035f, 0.02f), eyes);
+                Util.Prim(PrimitiveType.Cube, head, new Vector3(0, 0.19f, 0.118f), new Vector3(0.15f, 0.02f, 0.02f), hair); // brow line
                 Util.Prim(PrimitiveType.Sphere, head, new Vector3(0, 0.18f, -0.01f), new Vector3(0.255f, 0.24f, 0.26f), hair); // hair cap
             }
             if (L.Hood)
@@ -191,8 +195,8 @@ namespace Lanternfall
                 Util.Prim(PrimitiveType.Cube, head, new Vector3(0, 0.3f, -0.02f), new Vector3(0.05f, 0.04f, 0.24f), cloth); // crest
             }
             if (L.SpikyHair && !L.Hood && !L.Helmet)
-                for (int i = 0; i < 5; i++)
-                    Util.MeshObj("Spike", Util.Frustum(0.06f, 0f, 0.18f, 6), head, new Vector3((i - 2) * 0.05f, 0.27f, -0.02f - Mathf.Abs(i - 2) * 0.02f), hair, new Vector3(-25, 0, (i - 2) * -18));
+                for (int i = 0; i < 5; i++)   // chunky anime clumps
+                    Util.MeshObj("Spike", Util.Frustum(0.08f, 0f, 0.2f, 6), head, new Vector3((i - 2) * 0.055f, 0.25f, -0.02f - Mathf.Abs(i - 2) * 0.025f), hair, new Vector3(-30, 0, (i - 2) * -20));
             if (L.Ponytail && !L.Hood)
                 Util.Prim(PrimitiveType.Capsule, head, new Vector3(0, 0.08f, -0.17f), new Vector3(0.08f, 0.14f, 0.08f), hair, new Vector3(25, 0, 0));
             if (L.Goggles)
@@ -219,12 +223,12 @@ namespace Lanternfall
             armR = Pivot("ArmR", spine, new Vector3(0.27f * b, 0.52f, 0));
             foreach (var arm in new[] { armL, armR })
             {
-                Limb(arm, 0.3f, 0.12f * b, cloth);
+                Limb(arm, 0.3f, 0.105f * b, cloth);
                 var fore = Pivot("Forearm", arm, new Vector3(0, -0.3f, 0));
-                Limb(fore, 0.27f, 0.105f * b, L.Right == Weapon.Gauntlet ? trim : skin);
-                Util.Prim(PrimitiveType.Cube, fore, new Vector3(0, -0.12f, 0), new Vector3(0.12f, 0.08f, 0.12f) * b, trim); // bracer
+                Limb(fore, 0.27f, 0.09f * b, L.Right == Weapon.Gauntlet ? trim : skin);
+                Util.Prim(PrimitiveType.Cube, fore, new Vector3(0, -0.12f, 0), new Vector3(0.11f, 0.07f, 0.11f) * b, trim); // wristband
                 var hand = Pivot("Hand", fore, new Vector3(0, -0.3f, 0));
-                Util.Prim(PrimitiveType.Sphere, hand, Vector3.zero, Vector3.one * 0.1f * b, skin);
+                Util.Prim(PrimitiveType.Sphere, hand, Vector3.zero, new Vector3(0.12f, 0.14f, 0.13f) * b, skin);           // oversized mitt hand
                 if (arm == armL) { foreL = fore; handL = hand; } else { foreR = fore; handR = hand; }
             }
             AddWeapon(handR, L.Right, glow, trim, dark);

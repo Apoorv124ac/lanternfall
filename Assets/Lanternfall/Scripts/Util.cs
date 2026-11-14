@@ -14,10 +14,34 @@ namespace Lanternfall
 
         static int Key(Color c) => ((int)(c.r * 255) << 24) ^ ((int)(c.g * 255) << 16) ^ ((int)(c.b * 255) << 8) ^ (int)(c.a * 255);
 
-        /// <summary>A lit, matte material in the active render pipeline's default shader.</summary>
+        static Shader toon; static bool toonChecked;
+
+        /// <summary>True when the Lanternfall toon shader (flat cel colour + ink outline) is available.</summary>
+        public static bool Toon
+        {
+            get
+            {
+                if (!toonChecked)
+                {
+                    toonChecked = true;
+                    toon = Resources.Load<Shader>("LanternToon");
+                    if (toon == null) toon = Shader.Find("Lanternfall/Toon");
+                    if (toon != null && !toon.isSupported) toon = null;
+                }
+                return toon != null;
+            }
+        }
+
+        /// <summary>A matte material: the toon shader (cel shading + outline) when available, else the pipeline default.</summary>
         public static Material Lit(Color c)
         {
             if (lit.TryGetValue(Key(c), out var m)) return m;
+            if (Toon)
+            {
+                m = new Material(toon) { color = c };
+                lit[Key(c)] = m;
+                return m;
+            }
             if (litTemplate == null)
             {
                 var tmp = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -50,10 +74,25 @@ namespace Lanternfall
             go.transform.localPosition = pos;
             go.transform.localScale = scale;
             go.transform.localRotation = Quaternion.Euler(euler);
+            if (t == PrimitiveType.Cube && Toon) go.GetComponent<MeshFilter>().sharedMesh = OutlineCube(go.GetComponent<MeshFilter>().sharedMesh);
             var r = go.GetComponent<Renderer>();
             r.sharedMaterial = mat;
             r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
             return go;
+        }
+
+        static Mesh outlineCube;
+        /// <summary>The built-in cube with its corner signs stored in the tangents, so the toon outline stays closed at hard edges.</summary>
+        static Mesh OutlineCube(Mesh cube)
+        {
+            if (outlineCube != null) return outlineCube;
+            outlineCube = Object.Instantiate(cube);
+            outlineCube.name = "OutlineCube";
+            var v = outlineCube.vertices;
+            var tan = new Vector4[v.Length];
+            for (int i = 0; i < v.Length; i++) tan[i] = new Vector4(Mathf.Sign(v[i].x), Mathf.Sign(v[i].y), Mathf.Sign(v[i].z), 2f);
+            outlineCube.tangents = tan;
+            return outlineCube;
         }
 
         public static GameObject MeshObj(string name, Mesh mesh, Transform parent, Vector3 pos, Material mat, Vector3 euler = default, Vector3? scale = null)

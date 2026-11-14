@@ -50,7 +50,7 @@ namespace Lanternfall
             CamRig = new CameraRig();
             sun = new GameObject("Sun").AddComponent<Light>();
             sun.type = LightType.Directional;
-            sun.shadows = LightShadows.Soft;
+            sun.shadows = Util.Toon ? LightShadows.None : LightShadows.Soft; // toon look: flat colour, no cast shadows (blob shadows stay)
             sun.transform.rotation = Quaternion.Euler(50, -35, 0);
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
             RenderSettings.fog = true;

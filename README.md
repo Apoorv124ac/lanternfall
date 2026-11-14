@@ -52,6 +52,9 @@ Running, sprinting and sliding use **stamina** (green bar over your hero).
 
 ## Characters and art
 
+**Look:** every character and the arena use `Resources/LanternToon.shader`: flat cel colour with one hard shadow tone and a dark ink outline. The style is modelled on a clean 2D-cartoon sports game. Characters are slim, about 6 heads tall, with mitt hands, knee pads, chunky sneakers, dot-eye faces and strong hair silhouettes. If the shader can't load, the game falls back to the default lit material.
+
+
 The heroes and the Eclipse cult (Cultist, Gunner, Brute, Herald) are 3D humanoids built and animated in code (`Humanoid.cs`). That means the game runs with zero art assets. To use real rigged models instead:
 
 1. Import a rigged humanoid. Free options are Unity's *Starter Assets – ThirdPerson* (Asset Store) or characters from mixamo.com.

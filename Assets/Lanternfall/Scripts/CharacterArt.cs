@@ -51,16 +51,16 @@ namespace Lanternfall
             switch (kind)
             {
                 case EnemyKind.Gunner:
-                    return new Look { Skin = skin, Cloth = Util.Hex("#2a2440"), Cloth2 = Util.Hex("#151222"), Trim = Util.Hex("#3fa0a0"), Glow = Util.Hex("#7dfcff"),
+                    return new Look { Skin = skin, Shoe = Util.Hex("#2a2430"), Cloth = Util.Hex("#2a2440"), Cloth2 = Util.Hex("#151222"), Trim = Util.Hex("#3fa0a0"), Glow = Util.Hex("#7dfcff"),
                         Robe = false, Hood = true, Mask = true, Vest = true, Gun = Weapon.Rifle, Height = 0.97f };
                 case EnemyKind.Brute:
-                    return new Look { Skin = skin, Cloth = Util.Hex("#3a1450"), Cloth2 = Util.Hex("#1c0c26"), Trim = Util.Hex("#8a3a4a"), Glow = Util.Hex("#ff4f6a"),
+                    return new Look { Skin = skin, Shoe = Util.Hex("#2a2430"), Cloth = Util.Hex("#3a1450"), Cloth2 = Util.Hex("#1c0c26"), Trim = Util.Hex("#8a3a4a"), Glow = Util.Hex("#ff4f6a"),
                         Robe = false, Mask = true, Horns = true, Pauldrons = true, Right = Weapon.Club, Height = 1.45f, Bulk = 1.5f };
                 case EnemyKind.Boss:
-                    return new Look { Skin = Util.Hex("#3a2a44"), Cloth = Util.Hex("#1a0d24"), Cloth2 = Util.Hex("#0d0612"), Trim = Util.Hex("#c04aff"), Glow = Util.Hex("#ff5ab4"),
+                    return new Look { Skin = Util.Hex("#3a2a44"), Shoe = Util.Hex("#2a2430"), Cloth = Util.Hex("#1a0d24"), Cloth2 = Util.Hex("#0d0612"), Trim = Util.Hex("#c04aff"), Glow = Util.Hex("#ff5ab4"),
                         Robe = true, Mask = true, Crown = true, Cape = true, Pauldrons = true, Right = Weapon.Staff, Left = Weapon.Orb, Height = 3.0f, Bulk = 1.35f };
                 default:
-                    return new Look { Skin = skin, Cloth = Util.Hex("#2b1d3a"), Cloth2 = Util.Hex("#15101f"), Trim = Util.Hex("#6b2f8a"), Glow = Util.Hex("#ff9a3a"),
+                    return new Look { Skin = skin, Shoe = Util.Hex("#2a2430"), Cloth = Util.Hex("#2b1d3a"), Cloth2 = Util.Hex("#15101f"), Trim = Util.Hex("#6b2f8a"), Glow = Util.Hex("#ff9a3a"),
                         Robe = true, Hood = true, Mask = true, Right = Weapon.Sword };
             }
         }
