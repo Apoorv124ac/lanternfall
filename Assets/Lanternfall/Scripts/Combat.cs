@@ -11,9 +11,9 @@ namespace Lanternfall
         public Element Element;
         public Vector3 From;
         public float StunTime, FreezeTime, Push;
-        public bool NoReaction, Ult;
+        public bool NoReaction, Ult, Crit;
         public Hit(Hero src, float dmg, Element el, Vector3 from)
-        { Source = src; Damage = dmg; Element = el; From = from; StunTime = 0; FreezeTime = 0; Push = 3f; NoReaction = false; Ult = false; }
+        { Source = src; Damage = dmg; Element = el; From = from; StunTime = 0; FreezeTime = 0; Push = 3f; NoReaction = false; Ult = false; Crit = false; }
     }
 
     /// <summary>A red warning on the floor that fills up, then deals damage to heroes standing inside. Every enemy attack is telegraphed so it can be dodged.</summary>

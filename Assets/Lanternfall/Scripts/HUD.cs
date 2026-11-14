@@ -82,14 +82,50 @@ namespace Lanternfall
 
         void DrawCrosshair()
         {
-            if (State != GameState.Playing || Leader == null || Leader.Downed) return;
-            var lockOn = CamRig.LockTarget();
-            float cx = W / 2, cy = H / 2;
-            var c = lockOn != null ? new Color(1f, 0.45f, 0.4f, 0.95f) : new Color(1, 1, 1, 0.7f);
-            float g = lockOn != null ? 7 : 10;
-            Fill(new Rect(cx - 1, cy - g - 7, 2, 7), c); Fill(new Rect(cx - 1, cy + g, 2, 7), c);
-            Fill(new Rect(cx - g - 7, cy - 1, 7, 2), c); Fill(new Rect(cx + g, cy - 1, 7, 2), c);
+            // red vignette when hurt
+            if (HurtT > 0) { var hc = new Color(0.8f, 0.05f, 0.08f, HurtT * 0.9f); Fill(new Rect(0, 0, W, 26), hc); Fill(new Rect(0, H - 26, W, 26), hc); Fill(new Rect(0, 0, 26, H), hc); Fill(new Rect(W - 26, 0, 26, H), hc); }
+            if (State != GameState.Playing || Leader == null || Leader.Downed || Leader.Input == null) return;
+            var h = Leader;
+            float s = Screen.height / 720f;
+            var sp = CamRig.Cam.WorldToScreenPoint(h.AimPoint);
+            if (sp.z < 0) return;
+            float cx = sp.x / s, cy = (Screen.height - sp.y) / s;
+            bool onEnemy = Enemies.Exists(e => !e.Dead && (Util.Flat(h.AimPoint) - e.Pos).magnitude < e.Radius + 0.4f);
+            var c = onEnemy ? new Color(1f, 0.4f, 0.35f, 0.95f) : new Color(1, 1, 1, 0.85f);
+            float g = 6 + (h.Ads ? 0 : 6) + h.Gun.Bloom * 14f;
+            Fill(new Rect(cx - 1, cy - g - 8, 2, 8), c); Fill(new Rect(cx - 1, cy + g, 2, 8), c);
+            Fill(new Rect(cx - g - 8, cy - 1, 8, 2), c); Fill(new Rect(cx + g, cy - 1, 8, 2), c);
             Fill(new Rect(cx - 1.5f, cy - 1.5f, 3, 3), c);
+            // hit marker: an X that flashes on every hit (yellow on crits)
+            if (HitMarkerT > 0)
+            {
+                var hm = HitMarkerCrit ? new Color(1f, 0.85f, 0.2f) : Color.white;
+                for (int i = 0; i < 4; i++)
+                {
+                    float sx = (i % 2 == 0 ? -1 : 1), sy = (i < 2 ? -1 : 1);
+                    for (int k = 0; k < 4; k++) Fill(new Rect(cx + sx * (5 + k * 2) - 1.5f, cy + sy * (5 + k * 2) - 1.5f, 3, 3), hm);
+                }
+            }
+            // ammo + reload ring under the cursor
+            var gun = h.Gun;
+            if (gun.Reloading)
+            {
+                float rt = gun.Def.ReloadTime * Party.ReloadTime;
+                float t = 1f - gun.ReloadLeft / Mathf.Max(0.01f, rt);
+                Fill(new Rect(cx - 22, cy + 22, 44, 4), new Color(0, 0, 0, 0.6f));
+                Fill(new Rect(cx - 22, cy + 22, 44 * t, 4), Ember);
+                Text(new Rect(cx - 60, cy + 26, 120, 16), "RELOADING", Ember, 10);
+            }
+            else if (gun.Ammo <= Mathf.Max(2, gun.MagSize / 5))
+                Text(new Rect(cx - 60, cy + 20, 120, 16), gun.Ammo == 0 ? "RELOAD [R]" : "LOW AMMO", new Color(1f, 0.5f, 0.4f), 10);
+            // stamina bar above the hero, only while it is not full (like the devlog)
+            if (h.Stamina < h.MaxStamina - 0.5f)
+            {
+                var hp = CamRig.Cam.WorldToScreenPoint(h.Pos + Vector3.up * 2.3f);
+                float bx = hp.x / s - 30, by = (Screen.height - hp.y) / s;
+                Fill(new Rect(bx, by, 60, 5), new Color(0, 0, 0, 0.6f));
+                Fill(new Rect(bx, by, 60 * h.Stamina / h.MaxStamina, 5), h.Stamina < 15 ? new Color(1f, 0.4f, 0.3f) : new Color(0.55f, 0.95f, 0.6f));
+            }
         }
 
         void DrawLeader()
@@ -107,10 +143,40 @@ namespace Lanternfall
             Bar(new Rect(x + 92, y + 38, 272, 16), h.Hp / h.MaxHp, h.Downed ? Color.gray : new Color(0.92f, 0.3f, 0.36f), $"{Mathf.CeilToInt(h.Hp)} / {Mathf.CeilToInt(h.MaxHp)}");
             // abilities
             bool mouse = h.Input != null && h.Input.UsesMouse;
-            Ability(new Rect(x + 92, y + 62, 84, 40), h.Def.SpecialName, mouse ? "RMB" : "Y", h.SpecialReady, h.Def.Accent);
-            Ability(new Rect(x + 182, y + 62, 100, 40), h.Def.UltName, mouse ? "Q" : "LB", h.UltCharge / 100f, Ember);
-            Ability(new Rect(x + 288, y + 62, 76, 40), "Dodge", mouse ? "Space" : "B", 1f - Mathf.Clamp01(h.DodgeCd / 0.9f), new Color(0.7f, 0.85f, 1f));
+            Ability(new Rect(x + 92, y + 62, 84, 40), h.Def.SpecialName, mouse ? "E" : "Y", h.SpecialReady, h.Def.Accent);
+            Ability(new Rect(x + 182, y + 62, 100, 40), h.Def.UltName, mouse ? "Q" : "RB", h.UltCharge / 100f, Ember);
+            Ability(new Rect(x + 288, y + 62, 76, 40), "Stamina", mouse ? "Shift" : "L3", h.Stamina / h.MaxStamina, new Color(0.55f, 0.95f, 0.6f));
             Text(new Rect(x + 16, y + 80, 64, 26), $"LV {Party.Level}", Ember, 16);
+
+            // ammo panel, bottom right
+            var gun = h.Gun;
+            float ax = W - 244, ay = H - 96;
+            Fill(new Rect(ax, ay, 220, 76), Panel);
+            Fill(new Rect(ax + 214, ay, 6, 76), h.Def.Accent);
+            Text(new Rect(ax + 12, ay + 6, 196, 18), gun.Def.Name.ToUpper(), Muted, 12, TextAnchor.MiddleLeft);
+            var ac = gun.Reloading ? Muted : gun.Ammo <= gun.MagSize / 5 ? new Color(1f, 0.5f, 0.4f) : Color.white;
+            Text(new Rect(ax + 12, ay + 24, 120, 44), gun.Reloading ? "--" : gun.Ammo.ToString(), ac, 38, TextAnchor.MiddleLeft);
+            Text(new Rect(ax + 100, ay + 34, 100, 30), $"/ {gun.MagSize}", Muted, 16, TextAnchor.MiddleLeft);
+            Text(new Rect(ax + 12, ay + 56, 196, 16), h.Loco.ToString().ToUpper() + (h.Ads ? " · AIM" : ""), h.Def.Accent, 10, TextAnchor.MiddleRight);
+            if (DevHud) DrawDevHud(h);
+        }
+
+        void DrawDevHud(Hero h)
+        {
+            var r = new Rect(W - 244, 76, 220, 150);
+            Fill(r, new Color(0, 0, 0, 0.7f));
+            var gun = h.Gun;
+            float acc = gun.Shots > 0 ? 100f * gun.Hits / gun.Shots : 0;
+            string txt =
+                $"<b>DEV HUD</b>  (F3)\n" +
+                $"speed      {h.SpeedNow:0.00} m/s\n" +
+                $"posture    {h.Loco}{(h.Ads ? " + ADS" : "")}\n" +
+                $"stamina    {h.Stamina:0}/{h.MaxStamina:0}\n" +
+                $"cadence    {gun.Def.Rps * Party.FireRate:0.0} rps\n" +
+                $"hits/shots {gun.Hits}/{gun.Shots} ({acc:0}%)\n" +
+                $"camera     {CamRig.ModeName}\n" +
+                $"fps        {1f / Mathf.Max(0.0001f, Time.unscaledDeltaTime):0}";
+            Text(new Rect(r.x + 10, r.y + 6, r.width - 20, r.height - 12), txt, new Color(0.6f, 1f, 0.7f), 12, TextAnchor.UpperLeft);
         }
 
         void Ability(Rect r, string name, string key, float ready, Color c)
@@ -152,7 +218,7 @@ namespace Lanternfall
         {
             var def = FloorDef.All[floor];
             Text(new Rect(0, 8, W, 22), def.Name.ToUpper(), Ink, 15);
-            string sub = portalOpen ? "Walk into the portal to descend" : BossAlive ? "" : $"Wave {Mathf.Min(wave + 1, def.Waves.Length)} · {Enemies.Count + pendingSpawns} cultists remain";
+            string sub = portalOpen ? "Walk into the portal to descend" : BossAlive ? "" : $"Wave {Mathf.Min(wave + 1, def.Waves.Length)} · {Enemies.Count + pendingSpawns} enemies remain";
             Text(new Rect(0, 30, W, 18), sub, Muted, 12);
             if (BossAlive)
             {
@@ -206,22 +272,21 @@ namespace Lanternfall
             Text(new Rect(0, 110, W, 60), "PAUSED", Ember, 46);
             string[] rows =
             {
-                "<b>Move</b>  WASD / left stick",
-                "<b>Camera</b>  mouse / right stick",
-                "<b>Attack</b>  left mouse / X or RT (hold)",
-                "<b>Special</b>  right mouse or E / Y or RB",
-                "<b>Ultimate</b>  Q / LB or LT (charges as you deal damage)",
-                "<b>Dodge roll</b>  Space / B (you can't be hit mid-roll)",
-                "<b>Revive an ally</b>  hold F / hold A",
+                "<b>Move</b>  WASD / left stick      <b>Aim</b>  mouse / right stick",
+                "<b>Run</b>  hold Shift / L3      <b>Tactical sprint</b>  double-tap Shift (can't shoot)",
+                "<b>Crouch / Slide</b>  Ctrl or C / B (slide while running, you can shoot mid-slide)",
+                "<b>Fire</b>  left mouse / RT      <b>Aim down sights</b>  right mouse / LT (tighter spread)",
+                "<b>Reload</b>  R / X      <b>Special</b>  E / Y      <b>Ultimate</b>  Q / RB",
+                "<b>Revive an ally</b>  hold F / hold A      <b>Camera view</b>  Tab / Select      <b>Dev HUD</b>  F3",
                 "<b>Friends</b>  a second gamepad presses A to take over an AI hero",
                 "",
-                "Red circles on the floor are incoming attacks: roll out of them.",
+                "Red lines are enemy laser sights, red circles are incoming attacks: slide out of them.",
                 "Fire or lightning on a frozen enemy SHATTERS it. Lightning on a burning one OVERLOADS.",
-                "Stand in the Lantern's light to heal. Enemies outside it hit harder.",
+                "Stand in the Lantern's light to heal. Every level-up makes the whole squad stronger.",
                 "",
                 "Esc / Start to resume",
             };
-            for (int i = 0; i < rows.Length; i++) Text(new Rect(0, 190 + i * 28, W, 26), rows[i], i >= 9 ? Muted : Ink, 16);
+            for (int i = 0; i < rows.Length; i++) Text(new Rect(0, 190 + i * 28, W, 26), rows[i], i >= 8 ? Muted : Ink, 16);
         }
 
         // ---------------------------------------------------------------- title
@@ -244,7 +309,7 @@ namespace Lanternfall
                 Text(new Rect(r.x + 14, r.y + 42, r.width - 28, 18), d.Role, Muted, 12, TextAnchor.MiddleLeft);
                 Text(new Rect(r.x + 14, r.y + 62, r.width - 28, 64), d.Blurb, Ink, 12, TextAnchor.UpperLeft);
                 Text(new Rect(r.x + 14, r.y + 132, r.width - 28, 70),
-                    $"<color=#9a92b8>Attack</color>  {d.AttackName}\n<color=#9a92b8>Special</color>  {d.SpecialName}\n<color=#9a92b8>Ultimate</color>  {d.UltName}", Ink, 12, TextAnchor.UpperLeft);
+                    $"<color=#9a92b8>Gun</color>  {d.AttackName}\n<color=#9a92b8>Special</color>  {d.SpecialName}\n<color=#9a92b8>Ultimate</color>  {d.UltName}", Ink, 12, TextAnchor.UpperLeft);
                 if (GUI.Button(r, GUIContent.none, GUIStyle.none)) titleClick = i;
             }
             float blink = 0.6f + Mathf.Sin(runTime * 4f) * 0.4f;

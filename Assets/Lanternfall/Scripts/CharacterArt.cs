@@ -38,7 +38,7 @@ namespace Lanternfall
                 switch (kind)
                 {
                     case EnemyKind.Cultist: prefab = Config.Cultist; break;
-                    case EnemyKind.Archer: prefab = Config.Archer; break;
+                    case EnemyKind.Gunner: prefab = Config.Archer; break;
                     case EnemyKind.Brute: prefab = Config.Brute; break;
                     case EnemyKind.Boss: prefab = Config.Boss; break;
                 }
@@ -50,9 +50,9 @@ namespace Lanternfall
             Color skin = Util.Hex("#6e5f6a");
             switch (kind)
             {
-                case EnemyKind.Archer:
+                case EnemyKind.Gunner:
                     return new Look { Skin = skin, Cloth = Util.Hex("#2a2440"), Cloth2 = Util.Hex("#151222"), Trim = Util.Hex("#3fa0a0"), Glow = Util.Hex("#7dfcff"),
-                        Robe = false, Hood = true, Mask = true, Cape = true, Left = Weapon.Bow, Height = 0.97f };
+                        Robe = false, Hood = true, Mask = true, Vest = true, Gun = Weapon.Rifle, Height = 0.97f };
                 case EnemyKind.Brute:
                     return new Look { Skin = skin, Cloth = Util.Hex("#3a1450"), Cloth2 = Util.Hex("#1c0c26"), Trim = Util.Hex("#8a3a4a"), Glow = Util.Hex("#ff4f6a"),
                         Robe = false, Mask = true, Horns = true, Pauldrons = true, Right = Weapon.Club, Height = 1.45f, Bulk = 1.5f };

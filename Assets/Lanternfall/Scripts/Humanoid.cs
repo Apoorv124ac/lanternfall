@@ -3,14 +3,16 @@ using UnityEngine;
 
 namespace Lanternfall
 {
-    public enum Weapon { None, Staff, Orb, Sword, Bow, Club, Shield, Rods, Gauntlet }
-    public enum Pose { None, Cast, Swing, Special, Bow, Hit, Dodge, Ultimate, Slam }
+    public enum Weapon { None, Staff, Orb, Sword, Bow, Club, Shield, Rods, Gauntlet, Rifle, Shotgun }
+    public enum Pose { None, Cast, Swing, Special, Bow, Hit, Dodge, Ultimate, Slam, Reload, Shoot }
 
     /// <summary>How a character looks. Heroes and the Eclipse cult share one body, dressed differently.</summary>
     public sealed class Look
     {
         public Color Skin = Util.Hex("#d9a184"), Cloth = Color.gray, Cloth2 = Color.gray, Trim = Color.white, Glow = Color.white, Hair = Util.Hex("#2a1d18"), Eyes = Util.Hex("#1b1424");
-        public bool Robe = true, Hood, Mask, Halo, SpikyHair, Pauldrons, Crown, Goggles, Cape, Horns, Ponytail;
+        public bool Robe = true, Hood, Mask, Halo, SpikyHair, Pauldrons, Crown, Goggles, Cape, Horns, Ponytail, Helmet, Vest, Backpack;
+        /// <summary>A two-handed firearm carried at the chest (heroes and gunners).</summary>
+        public Weapon Gun = Weapon.None;
         public Weapon Right = Weapon.None, Left = Weapon.None;
         public float Height = 1f, Bulk = 1f;
     }
@@ -22,7 +24,17 @@ namespace Lanternfall
     /// </summary>
     public sealed class Humanoid : MonoBehaviour
     {
-        Transform rig, hips, spine, head, armL, armR, foreL, foreR, handL, handR, legL, legR, shinL, shinR, cape;
+        Transform rig, hips, spine, head, armL, armR, foreL, foreR, handL, handR, legL, legR, shinL, shinR, cape, gun, muzzle;
+        float crouch, aim = 0.6f; bool sliding;
+        public Transform Muzzle => muzzle;
+
+        /// <summary>Stance for this frame: crouch 0..1, gun raised 0..1 (0 = lowered for sprinting), sliding.</summary>
+        public void SetStance(float crouchAmt, float aimAmt, bool slide)
+        {
+            crouch = Mathf.MoveTowards(crouch, crouchAmt, Time.deltaTime * 6f);
+            aim = Mathf.MoveTowards(aim, aimAmt, Time.deltaTime * 6f);
+            sliding = slide;
+        }
         readonly List<Renderer> renderers = new List<Renderer>();
         MaterialPropertyBlock block;
         float phase, breathe, lie;
@@ -133,6 +145,14 @@ namespace Lanternfall
                 Util.Prim(PrimitiveType.Sphere, spine, new Vector3(-0.27f * b, 0.53f, 0), new Vector3(0.24f, 0.16f, 0.24f) * b, trim);
                 Util.Prim(PrimitiveType.Sphere, spine, new Vector3(0.27f * b, 0.53f, 0), new Vector3(0.24f, 0.16f, 0.24f) * b, trim);
             }
+            if (L.Vest)
+            {
+                Util.Prim(PrimitiveType.Cube, spine, new Vector3(0, 0.34f, 0.02f), new Vector3(0.46f * b, 0.4f, 0.32f * b), trim);
+                Util.Prim(PrimitiveType.Cube, spine, new Vector3(0, 0.3f, 0.18f * b), new Vector3(0.3f * b, 0.14f, 0.04f), cloth2); // pouches
+                Util.Prim(PrimitiveType.Cube, spine, new Vector3(-0.12f * b, 0.46f, 0.18f * b), new Vector3(0.06f, 0.06f, 0.02f), glow); // element badge
+            }
+            if (L.Backpack)
+                Util.Prim(PrimitiveType.Cube, spine, new Vector3(0, 0.35f, -0.2f * b), new Vector3(0.34f * b, 0.38f, 0.16f), cloth2);
             if (L.Cape)
             {
                 cape = Pivot("Cape", spine, new Vector3(0, 0.56f, -0.13f * b));
@@ -164,7 +184,13 @@ namespace Lanternfall
                 Util.Prim(PrimitiveType.Sphere, head, new Vector3(0, 0.16f, -0.025f), new Vector3(0.31f, 0.33f, 0.31f), cloth);
                 Util.MeshObj("HoodTip", Util.Frustum(0.12f, 0.0f, 0.22f, 8), head, new Vector3(0, 0.22f, -0.12f), cloth, new Vector3(-55, 0, 0));
             }
-            if (L.SpikyHair && !L.Hood)
+            if (L.Helmet)
+            {
+                Util.Prim(PrimitiveType.Sphere, head, new Vector3(0, 0.17f, -0.01f), new Vector3(0.3f, 0.29f, 0.31f), trim);
+                Util.Prim(PrimitiveType.Cube, head, new Vector3(0, 0.15f, 0.12f), new Vector3(0.22f, 0.07f, 0.06f), glow); // visor
+                Util.Prim(PrimitiveType.Cube, head, new Vector3(0, 0.3f, -0.02f), new Vector3(0.05f, 0.04f, 0.24f), cloth); // crest
+            }
+            if (L.SpikyHair && !L.Hood && !L.Helmet)
                 for (int i = 0; i < 5; i++)
                     Util.MeshObj("Spike", Util.Frustum(0.06f, 0f, 0.18f, 6), head, new Vector3((i - 2) * 0.05f, 0.27f, -0.02f - Mathf.Abs(i - 2) * 0.02f), hair, new Vector3(-25, 0, (i - 2) * -18));
             if (L.Ponytail && !L.Hood)
@@ -203,9 +229,25 @@ namespace Lanternfall
             }
             AddWeapon(handR, L.Right, glow, trim, dark);
             AddWeapon(handL, L.Left, glow, trim, dark);
+            if (L.Gun != Weapon.None) BuildGun(L.Gun, trim, glow, dark);
 
             GetComponentsInChildren(renderers);
             block = new MaterialPropertyBlock();
+        }
+
+        void BuildGun(Weapon w, Material trim, Material glow, Material dark)
+        {
+            gun = Pivot("Gun", spine, new Vector3(0.1f * look.Bulk, 0.4f, 0.24f * look.Bulk));
+            var metal = Util.Lit(Util.Hex("#2b2d35"));
+            bool sg = w == Weapon.Shotgun;
+            Util.Prim(PrimitiveType.Cube, gun, new Vector3(0, 0, 0.12f), new Vector3(0.09f, 0.13f, 0.5f), metal);                 // receiver
+            Util.Prim(PrimitiveType.Cube, gun, new Vector3(0, 0.02f, sg ? 0.5f : 0.55f), new Vector3(sg ? 0.07f : 0.045f, sg ? 0.07f : 0.045f, sg ? 0.45f : 0.5f), dark); // barrel
+            Util.Prim(PrimitiveType.Cube, gun, new Vector3(0, -0.02f, -0.22f), new Vector3(0.07f, 0.12f, 0.24f), trim);            // stock
+            if (!sg) Util.Prim(PrimitiveType.Cube, gun, new Vector3(0, -0.12f, 0.18f), new Vector3(0.06f, 0.16f, 0.09f), metal, new Vector3(12, 0, 0)); // magazine
+            else Util.Prim(PrimitiveType.Cube, gun, new Vector3(0, -0.06f, 0.42f), new Vector3(0.08f, 0.06f, 0.24f), trim);                         // pump
+            Util.Prim(PrimitiveType.Cube, gun, new Vector3(0, 0.1f, 0.12f), new Vector3(0.05f, 0.05f, 0.14f), dark);                // sight
+            Util.Prim(PrimitiveType.Cube, gun, new Vector3(0.05f, 0.0f, 0.3f), new Vector3(0.01f, 0.03f, 0.3f), glow);               // element strip
+            muzzle = Pivot("Muzzle", gun, new Vector3(0, 0.02f, sg ? 0.75f : 0.82f));
         }
 
         void AddWeapon(Transform hand, Weapon w, Material glow, Material trim, Material dark)
@@ -352,6 +394,42 @@ namespace Lanternfall
                     lean -= 18 * (1 - t);
                     aL += new Vector3(0, 0, -25 * (1 - t)); aR += new Vector3(0, 0, 25 * (1 - t));
                     break;
+            }
+            if (gun != null && pose != Pose.Special && pose != Pose.Ultimate && pose != Pose.Swing && pose != Pose.Slam)
+            {
+                // shoulder the rifle: right hand on the grip, left hand on the foregrip
+                float k = Mathf.Lerp(0.35f, 1f, aim);
+                var holdR = new Vector3(-55 - 25 * aim, 0, 12); var holdL = new Vector3(-70 - 15 * aim, -25, -28);
+                aR = Vector3.Lerp(aR, holdR, k); aL = Vector3.Lerp(aL, holdL, k);
+                fR = Vector3.Lerp(fR, new Vector3(-55 + 25 * aim, 0, 0), k); fL = Vector3.Lerp(fL, new Vector3(-30, 0, 0), k);
+                gun.localRotation = Quaternion.Euler(Mathf.Lerp(40f, 0f, aim), Mathf.Lerp(-25f, 0f, aim), 0);
+                if (pose == Pose.Reload)
+                {
+                    float r = Mathf.Sin(t * Mathf.PI);
+                    aL = Vector3.Lerp(holdL, new Vector3(-20, 0, -10), r); fL = Vector3.Lerp(fL, new Vector3(-90, 0, 0), r);
+                    gun.localRotation = Quaternion.Euler(25 * r, -15 * r, 20 * r);
+                }
+                if (pose == Pose.Shoot) gun.localPosition = new Vector3(0.1f * look.Bulk, 0.4f, 0.24f * look.Bulk - 0.06f * (1 - t));
+                else gun.localPosition = new Vector3(0.1f * look.Bulk, 0.4f, 0.24f * look.Bulk);
+            }
+            // crouch and slide
+            if (crouch > 0.01f || sliding)
+            {
+                float c2 = sliding ? 1f : crouch;
+                hips.localPosition += Vector3.down * (sliding ? 0.42f : 0.3f * c2);
+                if (sliding)
+                {
+                    legL.localRotation = Quaternion.Euler(-80, 0, -6); legR.localRotation = Quaternion.Euler(-55, 0, 6);
+                    shinL.localRotation = Quaternion.Euler(8, 0, 0); shinR.localRotation = Quaternion.Euler(70, 0, 0);
+                    lean -= 22;
+                }
+                else
+                {
+                    legL.localRotation = Quaternion.Euler(-s * 25 * amt - 55 * c2, 0, 0); legR.localRotation = Quaternion.Euler(s * 25 * amt - 55 * c2, 0, 0);
+                    shinL.localRotation = Quaternion.Euler(95 * c2 + 4, 0, 0); shinR.localRotation = Quaternion.Euler(95 * c2 + 4, 0, 0);
+                    lean += 14 * c2;
+                }
+                spine.localRotation = Quaternion.Euler(lean, twist, 0);
             }
             armL.localRotation = Quaternion.Euler(aL);
             armR.localRotation = Quaternion.Euler(aR);

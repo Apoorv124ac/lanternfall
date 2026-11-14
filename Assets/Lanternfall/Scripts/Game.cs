@@ -90,7 +90,7 @@ namespace Lanternfall
             foreach (var h in Heroes) { h.Input = null; h.FullRestore(); h.UltCharge = 0; }
             Leader = Heroes.Find(h => h.Def.Kind == pick);
             Leader.Input = p1;
-            CamRig.Yaw = 0; CamRig.Pitch = 16;
+            CamRig.Yaw = 0; CamRig.Pitch = 60;
             EnterFloor(0);
         }
 
@@ -236,10 +236,12 @@ namespace Lanternfall
                     break;
             }
 
-            // cursor: locked while the mouse player is fighting
-            bool wantLock = State == GameState.Playing && Leader != null && Leader.Input != null && Leader.Input.UsesMouse;
-            Cursor.lockState = wantLock ? CursorLockMode.Locked : CursorLockMode.None;
-            Cursor.visible = !wantLock;
+            // cursor: confined to the window while the mouse player fights; the HUD draws a crosshair at it
+            bool fighting = State == GameState.Playing && Leader != null && Leader.Input != null && Leader.Input.UsesMouse;
+            Cursor.lockState = fighting ? CursorLockMode.Confined : CursorLockMode.None;
+            Cursor.visible = !fighting;
+            if (Controls.DevHudPressed()) DevHud = !DevHud;
+            HitMarkerT -= udt; HurtT -= udt;
 
             TickPops(udt);
         }
@@ -302,6 +304,11 @@ namespace Lanternfall
             PollDropIn();
 
             if (pendingLevels > 0) { OpenLevelUp(); return; }
+            if (Leader.Input != null && Leader.Input.CameraToggle)
+            {
+                CamRig.Toggle();
+                Popup(Leader.Pos + Vector3.up * 2.4f, "Camera: " + CamRig.ModeName, Color.white, 16);
+            }
 
             if (portalOpen && (Leader.Pos - portalPos).magnitude < 2.2f && floor + 1 < FloorDef.All.Length)
             {
@@ -437,6 +444,13 @@ namespace Lanternfall
         }
 
         public void HitStop(float t) => hitStopT = Mathf.Max(hitStopT, t);
+
+        /// <summary>Debug HUD (F3): speed, posture, stamina, hits/shots, like the devlog.</summary>
+        public bool DevHud;
+        public float HitMarkerT, HurtT;
+        public bool HitMarkerCrit;
+        public void HitMarker(bool crit) { HitMarkerCrit = crit || (HitMarkerT > 0 && HitMarkerCrit); HitMarkerT = 0.14f; }
+        public void HurtFlash() => HurtT = 0.35f;
         public void Shake(float t, float amp) => CamRig.Shake(t, amp);
 
         public void Reaction(string name, Vector3 at, Color c)

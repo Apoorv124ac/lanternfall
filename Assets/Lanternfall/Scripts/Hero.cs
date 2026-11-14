@@ -4,36 +4,45 @@ using UnityEngine;
 
 namespace Lanternfall
 {
+    public enum Loco { Walk, Run, Sprint, Crouch, Slide }
+
     /// <summary>
-    /// A Lanternbearer. Driven by a human (Controls) or by the companion AI when Input is null,
-    /// so a solo player always fights alongside the other three heroes.
+    /// A Lanternbearer: an armoured gunner with an elemental firearm, a special and an ultimate.
+    /// Twin-stick controls with the reel's movement set (walk, run, tactical sprint, crouch, slide with fire, stamina).
+    /// Driven by a human (Controls) or by the companion AI when Input is null.
     /// </summary>
     public sealed class Hero : MonoBehaviour
     {
         public HeroDef Def;
         public Controls Input;           // null = AI companion
-        public float Hp, UltCharge;
+        public Gun Gun;
+        public float Hp, UltCharge, Stamina = 100f;
         public bool Downed, Invulnerable;
         public float ReviveProgress, DownedTime;
-        public float AttackCd, SpecialCd, DodgeCd;
-        public Vector3 Facing = Vector3.forward;
+        public float SpecialCd;
+        public Vector3 Facing = Vector3.forward, AimPoint;
         public float Radius = 0.45f;
+        public Loco Loco { get; private set; }
+        public bool Ads { get; private set; }
+        public float SpeedNow { get; private set; }
         public Humanoid Body { get; private set; }
 
         public bool IsAI => Input == null;
         public float MaxHp => Def.MaxHp + Game.I.Party.MaxHpBonus;
+        public float MaxStamina => 100f * Game.I.Party.StaminaMax;
         public Vector3 Pos => Util.Flat(transform.position);
         public float SpecialReady => 1f - Mathf.Clamp01(SpecialCd / (Def.SpecialCooldown * Game.I.Party.Cooldown));
 
         PartyStats P => Game.I.Party;
         Pose pose; float poseT, poseDur;
-        float hitFlash, aimHold, dodgeT, speedNow;
-        Vector3 dodgeDir, knock;
-        float aiThink, aiStrafe;
+        float hitFlash, slideT, staminaDelay, fireHold;
+        bool crouchToggle;
+        Vector3 slideDir, knock, vel;
+        float aiThink, aiStrafe, aiBurst;
         Vector3 aiMove, aiAim;
-        bool aiAttack, aiSpecial, aiUlt, aiDodge, aiRevive;
+        bool aiFire, aiSpecial, aiUlt, aiSlide, aiRevive, aiRun;
 
-        const float ReviveTime = 1.4f, ReviveReach = 2f, DodgeTime = 0.42f, DodgeSpeed = 11f, SelfReviveTime = 10f;
+        const float ReviveTime = 1.4f, ReviveReach = 2f, SelfReviveTime = 10f, SlideTime = 0.62f, SlideSpeed = 12.5f;
 
         public static Hero Create(HeroKind kind, Controls input, Vector3 pos)
         {
@@ -42,10 +51,13 @@ namespace Lanternfall
             var h = go.AddComponent<Hero>();
             h.Def = HeroDef.Get(kind);
             h.Input = input;
+            h.Gun = new Gun(h.Def.Weapon);
             h.Body = CharacterArt.BuildHero(go.transform, h.Def);
             h.Hp = h.Def.MaxHp;
             h.aiStrafe = Random.value * 10f;
             Util.FloorDecal(go.transform, Util.Blob(new Color(0, 0, 0, 0.45f), 32), 0.55f, -6);
+            // a ring under each hero in their colour, so you can read the squad from above
+            Util.MeshObj("Ring", Util.Ring(0.55f, 0.63f, 32), go.transform, new Vector3(0, 0.025f, 0), Util.Glow(h.Def.Accent));
             return h;
         }
 
@@ -53,72 +65,107 @@ namespace Lanternfall
         {
             var g = Game.I;
             float dt = Time.deltaTime;
-            AttackCd -= dt; SpecialCd -= dt; DodgeCd -= dt; aimHold -= dt; hitFlash -= dt;
+            SpecialCd -= dt; hitFlash -= dt;
+            Gun.Tick(dt);
             if (pose != Pose.None) { poseT += dt / poseDur; if (poseT >= 1) pose = Pose.None; }
 
-            if (g.State != GameState.Playing) { Animate(dt, 0); return; }
+            if (g.State != GameState.Playing) { Animate(dt); return; }
 
             if (Downed)
             {
                 DownedTime += dt;
                 ReviveProgress = Mathf.Max(0, ReviveProgress - dt * 0.2f);
-                if (DownedTime > SelfReviveTime) Revive(0.3f);   // forgiving: you always get back up
-                Animate(dt, 0);
+                if (DownedTime > SelfReviveTime) Revive(0.3f);
+                Animate(dt);
                 return;
             }
 
-            // regen in the Lantern's light
             if (g.Lantern.LightAt(Pos) > 0.5f) Heal(P.LightRegen * dt, false);
 
             // ---- intent
-            Vector3 move; Vector3 aim; bool attack, special, ult, dodge, revive;
-            if (IsAI) { Think(dt); move = aiMove; aim = aiAim; attack = aiAttack; special = aiSpecial; ult = aiUlt; dodge = aiDodge; revive = aiRevive; }
+            Vector3 move, aim; bool fire, special, ult, slide, revive, run, sprintTap = false, crouchPress = false, reload = false;
+            if (IsAI)
+            {
+                Think(dt);
+                move = aiMove; aim = aiAim; fire = aiFire; special = aiSpecial; ult = aiUlt; slide = aiSlide; revive = aiRevive; run = aiRun;
+                Ads = false;
+            }
             else
             {
                 var m = Input.Move;
-                var camYaw = Quaternion.Euler(0, g.CamRig.Yaw, 0);
-                move = camYaw * new Vector3(m.x, 0, m.y);
-                aim = g.Leader == this ? g.CamRig.AimDirection(Pos) : SoftAim(move.sqrMagnitude > 0.01f ? move.normalized : Facing, 14f);
-                attack = Input.Attack; special = Input.Special; ult = Input.Ultimate; dodge = Input.Dodge; revive = Input.Interact;
+                var yaw = Quaternion.Euler(0, g.CamRig.Yaw, 0);
+                move = yaw * new Vector3(m.x, 0, m.y);
+                aim = ResolveAim(yaw);
+                fire = Input.Fire; special = Input.Special; ult = Input.Ultimate; revive = Input.Interact;
+                run = Input.Run; sprintTap = Input.SprintTap(); crouchPress = Input.Crouch; reload = Input.Reload;
+                Ads = Input.AimDownSights;
+                slide = false;
+                if (crouchPress && (Loco == Loco.Run || Loco == Loco.Sprint) && move.sqrMagnitude > 0.1f) { slide = true; crouchPress = false; }
             }
 
-            // ---- dodge roll (invulnerable)
-            if (dodge && DodgeCd <= 0 && dodgeT <= 0)
+            // ---- locomotion state machine (walk / run / tactical sprint / crouch / slide)
+            bool moving = move.sqrMagnitude > 0.01f;
+            if (crouchPress) crouchToggle = !crouchToggle;
+            if (slideT > 0)
             {
-                dodgeDir = move.sqrMagnitude > 0.01f ? move.normalized : -Facing;
-                dodgeT = DodgeTime; DodgeCd = 0.9f * P.DodgeCd;
+                slideT -= dt;
+                if (slideT <= 0) { Loco = crouchToggle ? Loco.Crouch : Loco.Walk; Invulnerable = false; }
+            }
+            else if (slide && Stamina >= 15f && moving)
+            {
+                slideT = SlideTime; slideDir = move.normalized; Loco = Loco.Slide;
+                Stamina -= 15f; staminaDelay = 0.7f;
                 Invulnerable = true;
-                SetPose(Pose.Dodge, DodgeTime);
+                Fx.Play("poof", Pos, scale: 0.35f);
+                crouchToggle = false;
             }
-            Vector3 vel;
-            if (dodgeT > 0)
+            else
             {
-                dodgeT -= dt;
-                vel = dodgeDir * DodgeSpeed;
-                if (dodgeT <= 0) Invulnerable = false;
+                if (sprintTap && moving && Stamina > 10f) Loco = Loco.Sprint;
+                else if (Loco == Loco.Sprint && (!moving || Stamina <= 0 || (!run && !IsAI) || fire || Ads)) Loco = run && moving ? Loco.Run : Loco.Walk;
+                else if (Loco != Loco.Sprint) Loco = crouchToggle ? Loco.Crouch : run && moving ? Loco.Run : Loco.Walk;
+                if (IsAI && aiRun && moving && Stamina > 30f) Loco = Loco.Sprint;
+                if (Loco == Loco.Run || Loco == Loco.Sprint) crouchToggle = false;
             }
-            else vel = move * Def.Speed * P.MoveSpeed * (aimHold > 0 ? 0.85f : 1f);
+            if (slideT > 0 && slideT < SlideTime - 0.35f) Invulnerable = false; // i-frames only at the start of the slide
 
+            // stamina
+            if (Loco == Loco.Sprint) { Stamina -= 24f * dt; staminaDelay = 0.6f; }
+            else if ((staminaDelay -= dt) <= 0) Stamina = Mathf.Min(MaxStamina, Stamina + 32f * dt);
+            Stamina = Mathf.Max(0, Stamina);
+
+            float speed = Def.Speed * P.MoveSpeed;
+            switch (Loco)
+            {
+                case Loco.Walk: speed *= 0.8f; break;
+                case Loco.Run: speed *= 1.08f; break;
+                case Loco.Sprint: speed *= 1.5f; break;
+                case Loco.Crouch: speed *= 0.45f; break;
+            }
+            if (Ads) speed *= 0.6f;
+            if (fire && Loco != Loco.Slide) speed *= 0.85f;
+
+            Vector3 want = slideT > 0 ? slideDir * Mathf.Lerp(Def.Speed * 0.6f, SlideSpeed, slideT / SlideTime) : move * speed;
+            vel = slideT > 0 ? want : Vector3.MoveTowards(vel, want, (moving ? 45f : 60f) * dt); // snappy accel
             knock = Vector3.MoveTowards(knock, Vector3.zero, 20f * dt);
             var p = transform.position + (vel + knock) * dt;
-            // shoulder past enemies
             foreach (var e in g.Enemies)
             {
                 var d = Util.Flat(p - e.Pos); float min = Radius + e.Radius;
                 if (d.sqrMagnitude < min * min && d.sqrMagnitude > 0.0001f) p += d.normalized * (min - d.magnitude) * 0.5f;
             }
             transform.position = g.World.Resolve(p, Radius);
-            speedNow = Util.Flat(vel).magnitude;
+            SpeedNow = Util.Flat(vel).magnitude;
 
-            // ---- facing
-            if (aimHold > 0 && aim.sqrMagnitude > 0.01f) Facing = aim.normalized;
-            else if (move.sqrMagnitude > 0.01f && dodgeT <= 0) Facing = move.normalized;
-            transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(Facing), 1f - Mathf.Exp(-14f * dt));
+            // ---- facing: always toward the aim, except while sprinting
+            if (Loco == Loco.Sprint && moving) Facing = move.normalized;
+            else if (aim.sqrMagnitude > 0.01f) Facing = aim.normalized;
+            else if (moving) Facing = move.normalized;
+            transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(Facing), 1f - Mathf.Exp(-20f * dt));
 
-            // ---- revive allies
+            // ---- revive
             bool reviving = false;
             if (revive)
-            {
                 foreach (var h in g.Heroes)
                     if (h != this && h.Downed && (h.Pos - Pos).sqrMagnitude < ReviveReach * ReviveReach)
                     {
@@ -127,28 +174,65 @@ namespace Lanternfall
                         if (h.ReviveProgress >= 1) h.Revive(0.5f);
                         break;
                     }
-            }
 
-            // ---- abilities
-            if (dodgeT <= 0 && !reviving)
+            // ---- weapons and powers
+            if (!reviving)
             {
-                if (ult && UltCharge >= 100) { UltCharge = 0; aimHold = 1f; Facing = aim.sqrMagnitude > 0.01f ? aim.normalized : Facing; StartCoroutine(Ultimate(aim)); }
-                else if (special && SpecialCd <= 0) { SpecialCd = Def.SpecialCooldown * P.Cooldown; aimHold = 0.5f; Special(aim); }
-                else if (attack && AttackCd <= 0) { AttackCd = Def.AttackCooldown / P.AttackSpeed; aimHold = 0.45f; Attack(aim); }
+                if (reload && Gun.StartReload()) SetPose(Pose.Reload, Gun.Def.ReloadTime * P.ReloadTime);
+                if (ult && UltCharge >= 100) { UltCharge = 0; StartCoroutine(Ultimate(Facing)); }
+                else if (special && SpecialCd <= 0) { SpecialCd = Def.SpecialCooldown * P.Cooldown; Special(Facing); }
+                else if (fire && Loco != Loco.Sprint)
+                {
+                    float spreadMult = Loco == Loco.Crouch ? 0.25f : Loco == Loco.Run || Loco == Loco.Slide ? 1.3f : 0.75f;
+                    if (Ads) spreadMult = 0f;
+                    var muzzle = Body.Muzzle ? Body.Muzzle.position : Pos + Vector3.up * 1.3f + Facing * 0.8f;
+                    bool wasReloading = Gun.Reloading;
+                    if (Gun.TryFire(this, muzzle, Facing, spreadMult)) SetPose(Pose.Shoot, 0.08f);
+                    else if (!wasReloading && Gun.Reloading) SetPose(Pose.Reload, Gun.Def.ReloadTime * P.ReloadTime);
+                    fireHold = 0.3f;
+                }
             }
+            fireHold -= dt;
 
-            Animate(dt, speedNow);
+            Animate(dt);
         }
 
-        void Animate(float dt, float speed)
+        void Animate(float dt)
         {
-            Body.Animate(dt, speed, pose, poseT, Downed ? 1 : 0);
+            float aimAmt = Loco == Loco.Sprint ? 0f : (fireHold > 0 || Ads) ? 1f : 0.55f;
+            Body.SetStance(Loco == Loco.Crouch ? 1f : 0f, aimAmt, Loco == Loco.Slide);
+            Body.Animate(dt, Loco == Loco.Slide ? 0 : SpeedNow, pose, poseT, Downed ? 1 : 0);
             if (hitFlash > 0) Body.Tint(new Color(1f, 0.55f, 0.55f));
-            else if (Invulnerable) Body.Tint(new Color(0.8f, 0.9f, 1f));
+            else if (Invulnerable) Body.Tint(new Color(0.85f, 0.92f, 1f));
             else Body.Tint(Color.clear);
         }
 
         void SetPose(Pose p, float dur) { pose = p; poseT = 0; poseDur = dur; }
+
+        /// <summary>Mouse: the point under the cursor (snapped to an enemy near it). Stick: the stick direction with light aim assist.</summary>
+        Vector3 ResolveAim(Quaternion camYaw)
+        {
+            var g = Game.I;
+            if (Input.UsesMouse && g.Leader == this)
+            {
+                AimPoint = g.CamRig.MouseGround(1.1f);
+                Enemy best = null; float bd = 1.4f;
+                foreach (var e in g.Enemies)
+                {
+                    if (e.Dead) continue;
+                    float d = (Util.Flat(AimPoint) - e.Pos).magnitude - e.Radius;
+                    if (d < bd) { bd = d; best = e; }
+                }
+                var target = best != null ? best.Pos : Util.Flat(AimPoint);
+                var dir = Util.Flat(target - Pos);
+                return dir.sqrMagnitude > 0.04f ? dir.normalized : Facing;
+            }
+            var st = Input.AimStick;
+            Vector3 baseDir = st.sqrMagnitude > 0.01f ? camYaw * new Vector3(st.x, 0, st.y) : (Input.Move.sqrMagnitude > 0.01f ? camYaw * new Vector3(Input.Move.x, 0, Input.Move.y) : Facing);
+            var aimDir = SoftAim(baseDir.normalized, Gun.Def.Range, st.sqrMagnitude > 0.01f ? 14f : 35f);
+            AimPoint = Pos + aimDir * 6f;
+            return aimDir;
+        }
 
         // ---------------------------------------------------------------- damage / healing
 
@@ -156,14 +240,14 @@ namespace Lanternfall
         {
             if (Downed || Invulnerable || Game.I.State != GameState.Playing) return;
             if (IsAI) amount *= 0.75f;
+            if (Loco == Loco.Crouch) amount *= 0.85f;
             Hp -= amount;
             hitFlash = 0.12f;
             knock += Util.Flat(Pos - from).normalized * 4f;
-            if (pose == Pose.None) SetPose(Pose.Hit, 0.3f);
-            if (Game.I.Leader == this) Game.I.Shake(0.15f, 0.12f);
+            if (Game.I.Leader == this) { Game.I.Shake(0.15f, 0.15f); Game.I.HurtFlash(); }
             if (Hp <= 0)
             {
-                Hp = 0; Downed = true; ReviveProgress = 0; DownedTime = 0; Invulnerable = false; dodgeT = 0;
+                Hp = 0; Downed = true; ReviveProgress = 0; DownedTime = 0; Invulnerable = false; slideT = 0; Loco = Loco.Walk;
                 Fx.Play("poof", Pos);
                 Game.I.Popup(Pos + Vector3.up * 2.2f, Def.Name + " is down!", new Color(1f, 0.45f, 0.45f));
             }
@@ -187,24 +271,21 @@ namespace Lanternfall
             Game.I.Popup(Pos + Vector3.up * 2.2f, Def.Name + " is back!", new Color(0.6f, 1f, 0.7f));
         }
 
-        /// <summary>Called when this hero's hit lands: charges the ultimate, applies lifesteal.</summary>
         public void OnDealt(float dmg, bool ult)
         {
-            if (!ult) UltCharge = Mathf.Min(100, UltCharge + dmg * 0.3f * P.UltRate);
+            if (!ult) UltCharge = Mathf.Min(100, UltCharge + dmg * 0.22f * P.UltRate);
             if (P.Lifesteal > 0) Heal(dmg * P.Lifesteal, false);
         }
 
         public void FullRestore()
         {
-            Downed = false; Hp = MaxHp; ReviveProgress = 0; SpecialCd = 0; Invulnerable = false; dodgeT = 0;
+            Downed = false; Hp = MaxHp; ReviveProgress = 0; SpecialCd = 0; Invulnerable = false; slideT = 0; Stamina = MaxStamina;
+            Loco = Loco.Walk; crouchToggle = false; Gun.Refill();
         }
 
-        // ---------------------------------------------------------------- aiming
-
-        Vector3 Hand => (Body.HandR ? Body.HandR.position : Pos + Vector3.up * 1.2f) + Facing * 0.3f;
+        Vector3 Hand => Body.Muzzle ? Body.Muzzle.position : Pos + Vector3.up * 1.3f + Facing * 0.6f;
         Vector3 Chest => Pos + Vector3.up * 1.25f;
 
-        /// <summary>Snap toward the enemy nearest the given direction (inside a cone).</summary>
         public Vector3 SoftAim(Vector3 dir, float range, float coneDeg = 40f)
         {
             Enemy best = null; float bestScore = float.MaxValue;
@@ -215,7 +296,7 @@ namespace Lanternfall
                 if (d > range || d < 0.01f) continue;
                 float ang = Vector3.Angle(dir, to);
                 if (ang > coneDeg) continue;
-                float score = ang * 0.08f + d;
+                float score = ang * 0.15f + d;
                 if (score < bestScore) { bestScore = score; best = e; }
             }
             return best == null ? dir : Util.Flat(best.Pos - Pos).normalized;
@@ -223,60 +304,7 @@ namespace Lanternfall
 
         float Dmg(float baseDmg) => baseDmg * P.Damage;
 
-        // ---------------------------------------------------------------- abilities
-
-        void Attack(Vector3 aim)
-        {
-            var g = Game.I;
-            if (aim.sqrMagnitude < 0.01f) aim = Facing;
-            SetPose(Pose.Cast, 0.32f);
-            int shots = 1 + P.ExtraShots;
-            switch (Def.Kind)
-            {
-                case HeroKind.Cinder:
-                case HeroKind.Rime:
-                {
-                    bool fire = Def.Kind == HeroKind.Cinder;
-                    for (int i = 0; i < shots; i++)
-                    {
-                        float spread = (i - (shots - 1) / 2f) * 9f;
-                        var dir = Quaternion.Euler(0, spread, 0) * aim;
-                        Projectile.Fire(this, fire ? "fireball" : "ice-lance", Chest + aim * 0.6f, dir, fire ? 18f : 22f, Dmg(fire ? 14f : 11f), 18f, fire ? Element.Fire : Element.Ice, 0.55f);
-                    }
-                    break;
-                }
-                case HeroKind.Volt:
-                {
-                    var hit = new List<Enemy>();
-                    for (int i = 0; i < shots; i++)
-                    {
-                        var e = g.NearestEnemy(Pos, 11f, aim, hit, 0.3f);
-                        if (e == null) break;
-                        hit.Add(e);
-                        var at = e.Pos + Vector3.up * e.Height * 0.55f;
-                        Bolt.Draw(Hand, at, new Color(1f, 0.97f, 0.55f), 0.09f, 0.08f);
-                        Fx.Play("zap-hit", at, scale: 0.55f);
-                        e.TakeHit(new Hit(this, Dmg(10f), Element.Lightning, Pos) { StunTime = 0.3f });
-                    }
-                    if (hit.Count == 0) Fx.Play("zap-hit", Chest + aim * 3f, scale: 0.4f);
-                    break;
-                }
-                case HeroKind.Sol:
-                {
-                    var hit = new List<Enemy>();
-                    for (int i = 0; i < shots; i++)
-                    {
-                        var e = g.NearestEnemy(Pos, 12f, aim, hit, 0.3f);
-                        var at = e != null ? e.Pos : Pos + aim * 5f;
-                        if (e != null) hit.Add(e);
-                        Fx.Play("smite", at, scale: 0.6f);
-                        StartCoroutine(After(0.22f, () => g.HitArea(this, at, 1.3f * P.Area, new Hit(this, Dmg(17f), Element.Holy, at))));
-                        if (e == null) break;
-                    }
-                    break;
-                }
-            }
-        }
+        // ---------------------------------------------------------------- powers (special + ultimate)
 
         void Special(Vector3 aim)
         {
@@ -424,26 +452,26 @@ namespace Lanternfall
         void Think(float dt)
         {
             var g = Game.I;
-            aiThink -= dt;
-            aiDodge = false;
+            aiThink -= dt; aiBurst -= dt;
+            aiSlide = false;
             var lead = g.Leader;
 
-            // 1. step out of telegraphed attacks
+            // 1. get out of telegraphed attacks (slide if it's close)
             foreach (var tg in Telegraph.Active)
             {
                 var d = Pos - tg.Pos; d.y = 0;
                 if (d.magnitude < tg.Radius + 0.7f)
                 {
-                    aiMove = (d.sqrMagnitude < 0.01f ? transform.right : d.normalized);
-                    aiDodge = DodgeCd <= 0 && Random.value < 0.05f;
-                    aiAttack = false; aiSpecial = false; aiRevive = false;
+                    aiMove = d.sqrMagnitude < 0.01f ? transform.right : d.normalized;
+                    aiSlide = Stamina > 40f && Random.value < 0.08f;
+                    aiRun = true; aiRevive = false;
                     return;
                 }
             }
 
             if (aiThink > 0) return;
-            aiThink = 0.15f;
-            aiAttack = aiSpecial = aiUlt = aiRevive = false;
+            aiThink = 0.12f;
+            aiFire = aiSpecial = aiUlt = aiRevive = aiRun = false;
             aiMove = Vector3.zero;
 
             // 2. revive a downed ally
@@ -452,29 +480,32 @@ namespace Lanternfall
                 if (h != this && h.Downed) { float d = (h.Pos - Pos).sqrMagnitude; if (d < dd) { dd = d; down = h; } }
             if (down != null && Hp > MaxHp * 0.3f)
             {
-                if (Def.Kind == HeroKind.Sol && SpecialCd <= 0 && dd < 30f) { aiSpecial = true; aiAim = Facing; return; }
-                if (dd > 1.5f * 1.5f) aiMove = Util.Flat(down.Pos - Pos).normalized;
+                if (Def.Kind == HeroKind.Sol && SpecialCd <= 0 && dd < 30f) { aiSpecial = true; return; }
+                if (dd > 1.5f * 1.5f) { aiMove = Util.Flat(down.Pos - Pos).normalized; aiRun = dd > 36f; }
                 else aiRevive = true;
                 return;
             }
 
-            // 3. fight
-            var target = g.NearestEnemy(lead != null && !lead.Downed ? lead.Pos : Pos, 16f, Vector3.zero);
-            if (target != null && (target.Pos - Pos).magnitude < 20f)
+            // 3. fight: hold preferred range, strafe, shoot in bursts
+            var target = g.NearestEnemy(lead != null && !lead.Downed ? lead.Pos : Pos, 18f, Vector3.zero);
+            if (target != null && (target.Pos - Pos).magnitude < 22f)
             {
                 var to = Util.Flat(target.Pos - Pos); float d = to.magnitude; var dir = to / Mathf.Max(d, 0.01f);
                 float range = Def.PreferredRange;
                 var side = Vector3.Cross(Vector3.up, dir) * Mathf.Sin(Time.time * 0.7f + aiStrafe);
-                if (d > range + 1f) aiMove = dir + side * 0.3f;
-                else if (d < range - 2f && Def.Kind != HeroKind.Rime) aiMove = -dir + side * 0.5f;
-                else aiMove = side * 0.6f;
-                aiAim = dir;
-                aiAttack = d < range + 6f;
+                if (d > range + 1.5f) aiMove = dir + side * 0.3f;
+                else if (d < range - 2.5f) aiMove = -dir + side * 0.5f;
+                else aiMove = side * 0.7f;
+                // aim with a little human wobble
+                aiAim = Quaternion.Euler(0, Mathf.Sin(Time.time * 3f + aiStrafe) * 4f, 0) * dir;
+                if (aiBurst < -0.25f) aiBurst = Random.Range(0.6f, 1.4f);
+                aiFire = d < Gun.Def.Range * 0.95f && aiBurst > 0;
+                if (Gun.Ammo == 0 && !Gun.Reloading) Gun.StartReload();
 
                 int near = g.CountEnemies(Pos, 4.5f * P.Area);
                 switch (Def.Kind)
                 {
-                    case HeroKind.Cinder: aiSpecial = near >= 2; if (near < 2 && SpecialCd <= 0 && g.CountEnemies(target.Pos, 4f) >= 3) aiMove = dir; break;
+                    case HeroKind.Cinder: aiSpecial = near >= 2; break;
                     case HeroKind.Rime: aiSpecial = near >= 2 || (near >= 1 && Hp < MaxHp * 0.5f); break;
                     case HeroKind.Volt: aiSpecial = g.CountEnemies(target.Pos, 6f) >= 2 || target.Kind != EnemyKind.Cultist; break;
                     case HeroKind.Sol: aiSpecial = g.Heroes.Exists(h => !h.Downed && h.Hp < h.MaxHp * 0.55f && (h.Pos - Pos).sqrMagnitude < 36f); break;
@@ -485,10 +516,11 @@ namespace Lanternfall
             // 4. stay with the leader
             if (lead != null && lead != this)
             {
-                var slot = Quaternion.Euler(0, 120f + 60f * (int)Def.Kind, 0) * Vector3.forward * 2.5f;
+                var slot = Quaternion.Euler(0, 120f + 60f * (int)Def.Kind, 0) * Vector3.forward * 2.8f;
                 var want = lead.Pos + Quaternion.LookRotation(lead.Facing) * slot;
                 float dl = (lead.Pos - Pos).magnitude;
-                if (dl > 12f || (target == null && (want - Pos).magnitude > 1.5f)) aiMove = Util.Flat(want - Pos).normalized * (dl > 6f ? 1f : 0.7f);
+                if (dl > 12f || (target == null && (want - Pos).magnitude > 1.5f)) { aiMove = Util.Flat(want - Pos).normalized; aiRun = dl > 7f; }
+                if (target == null) aiAim = lead.Facing;
             }
             if (aiMove.sqrMagnitude > 1) aiMove.Normalize();
         }

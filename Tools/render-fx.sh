@@ -14,7 +14,8 @@ shadow/dark-explosion spawn/poof spawn/spawn-portal explosions/plasma-explosion
 status/burning status/frozen status/stunned
 fire/meteor ice/blizzard-vortex lightning/lightning-strike holy/sunburst impacts/ground-slam
 shadow/void-orb shadow/eclipse shadow/shadow-flames ui/level-up pickups/xp-orb pickups/heart-pickup
-arcane/magic-circle-cast spawn/summon-rise spawn/shatter-death arcane/blink-out"
+arcane/magic-circle-cast spawn/summon-rise spawn/shatter-death arcane/blink-out
+projectiles/muzzle-smg impacts/bullet-impact impacts/hit-flash impacts/crit-hit"
 for id in $IDS; do
   (cd "$PFX" && node tools/render.mjs "$id" --sheet --no-actor --bg none --out "$OUT" >/dev/null)
   n="${id#*/}"; cp "$OUT/$id/$n.png" "$FX/$n.png"; cp "$OUT/$id/$n.json" "$META/$n.json"

@@ -6,7 +6,7 @@ namespace Lanternfall
 {
     /// <summary>
     /// The Eclipse cult: human servants of the Maw. Every attack is telegraphed on the floor first, so it can be dodged.
-    /// Cultist (blade), Archer (shadow bolts), Brute (ground slam) and the Eclipse Herald boss.
+    /// Cultist (blade rusher), Gunner (laser-sighted rifle bursts), Brute (ground slam) and the Eclipse Herald boss.
     /// </summary>
     public sealed class Enemy : MonoBehaviour
     {
@@ -39,7 +39,7 @@ namespace Lanternfall
             switch (kind)
             {
                 case EnemyKind.Cultist: e.MaxHp = 38; e.Speed = 3.6f; e.Dmg = 9; break;
-                case EnemyKind.Archer: e.MaxHp = 28; e.Speed = 3.4f; e.Dmg = 7; break;
+                case EnemyKind.Gunner: e.MaxHp = 28; e.Speed = 3.4f; e.Dmg = 7; break;
                 case EnemyKind.Brute: e.MaxHp = 260; e.Speed = 2.7f; e.Dmg = 18; e.Radius = 0.8f; e.Height = 2.6f; break;
                 case EnemyKind.Boss: e.MaxHp = 2000; e.Speed = 2.6f; e.Dmg = 20; e.Radius = 1.6f; e.Height = 5.4f; break;
             }
@@ -78,7 +78,7 @@ namespace Lanternfall
                         if (d > 1.7f) vel = (dir + Vector3.Cross(Vector3.up, dir) * Mathf.Sin(Time.time + strafe) * 0.4f).normalized * Speed;
                         else if (attackCd <= 0) attackRoutine = StartCoroutine(Swing());
                         break;
-                    case EnemyKind.Archer:
+                    case EnemyKind.Gunner:
                         if (d < 7f) vel = -dir * Speed * 0.8f;
                         else if (d > 12f) vel = dir * Speed;
                         else vel = Vector3.Cross(Vector3.up, dir) * Mathf.Sin(Time.time * 0.8f + strafe) * Speed * 0.5f;
@@ -109,6 +109,7 @@ namespace Lanternfall
             speedNow = Util.Flat(vel).magnitude;
             if (!held) transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(facing), 1f - Mathf.Exp(-(busy ? 4f : 10f) * dt));
 
+            if (Kind == EnemyKind.Gunner) body.SetStance(0f, busy ? 1f : 0.35f, false);
             body.Animate(held ? 0 : dt, held ? 0 : speedNow, pose, poseT, 0);
             if (hitFlash > 0) body.Tint(new Color(1f, 1f, 1f));
             else if (Frozen > 0) body.Tint(new Color(0.65f, 0.9f, 1f));
@@ -136,6 +137,7 @@ namespace Lanternfall
         {
             if (attackRoutine != null) StopCoroutine(attackRoutine);
             if (pending) Destroy(pending.gameObject);
+            if (laserNow) Destroy(laserNow.gameObject);
             busy = false; pose = Pose.None;
             attackCd = Mathf.Max(attackCd, 0.6f);
         }
@@ -151,19 +153,75 @@ namespace Lanternfall
             busy = false; attackCd = Random.Range(1.4f, 2.2f);
         }
 
+        /// <summary>Gunner attack: a red laser sight tracks the target, locks (blinks), then a 3-round burst. Slide sideways when it locks.</summary>
         IEnumerator Shoot()
         {
             busy = true;
-            SetPose(Pose.Bow, 0.9f);
-            yield return new WaitForSeconds(0.6f);
-            if (target != null)
+            var laser = Laser(); laserNow = laser;
+            float track = 0.75f, lockT = 0.35f, t = 0;
+            Vector3 dir = facing;
+            while (t < track + lockT)
             {
-                var lead = target.Pos + (target.transform.forward * 0.6f);
-                var from = Pos + Vector3.up * 1.35f + facing * 0.5f;
-                Projectile.Hostile("shadow-bolt", from, Util.Flat(lead - Pos).normalized, 11f, Dmg * DmgMult);
+                if (Dead) { Destroy(laser.gameObject); yield break; }
+                t += Time.deltaTime;
+                bool locked = t >= track;
+                if (!locked && target != null) { dir = Util.Flat(target.Pos - Pos).normalized; facing = dir; }
+                var from = MuzzlePos();
+                laser.SetPosition(0, from);
+                laser.SetPosition(1, from + dir * LaserLength(from, dir));
+                float a = locked ? (Mathf.Repeat(t * 16f, 1f) > 0.5f ? 1f : 0.25f) : 0.45f;
+                var c = new Color(1f, 0.15f, 0.12f, a);
+                laser.startColor = c; laser.endColor = new Color(c.r, c.g, c.b, a * 0.3f);
+                laser.widthMultiplier = locked ? 0.07f : 0.035f;
+                yield return null;
             }
-            yield return new WaitForSeconds(0.25f);
-            busy = false; attackCd = Random.Range(2.2f, 3f);
+            Destroy(laser.gameObject);
+            for (int i = 0; i < 3; i++)
+            {
+                if (Dead) yield break;
+                SetPose(Pose.Shoot, 0.12f);
+                var from = MuzzlePos();
+                var spread = Quaternion.Euler(0, Random.Range(-3f, 3f), 0) * dir;
+                Projectile.Hostile("shadow-bolt", from, spread, 15f, Dmg * DmgMult, 0.35f);
+                Fx.Play("muzzle-smg", from, scale: 0.6f);
+                yield return new WaitForSeconds(0.11f);
+            }
+            yield return new WaitForSeconds(0.2f);
+            busy = false; attackCd = Random.Range(2.0f, 2.8f);
+        }
+
+        Vector3 MuzzlePos() => body.Muzzle != null ? body.Muzzle.position : Pos + Vector3.up * 1.3f + facing * 0.7f;
+
+        float LaserLength(Vector3 from, Vector3 dir)
+        {
+            float len = 22f;
+            foreach (var pl in Game.I.World.Pillars)
+            {
+                float t = Gun.RayCircle(from, dir, new Vector3(pl.x, 0, pl.y), pl.z);
+                if (t >= 0 && t < len) len = t;
+            }
+            foreach (var h in Game.I.Heroes)
+            {
+                if (h.Downed) continue;
+                float t = Gun.RayCircle(from, dir, h.Pos, 0.45f);
+                if (t >= 0 && t < len) len = t;
+            }
+            return len;
+        }
+
+        static Material laserMat;
+        LineRenderer laserNow;
+        LineRenderer Laser()
+        {
+            var go = new GameObject("laser sight");
+            go.transform.SetParent(transform, false);
+            var lr = go.AddComponent<LineRenderer>();
+            lr.positionCount = 2; lr.useWorldSpace = true;
+            if (laserMat == null) laserMat = new Material(Shader.Find("Sprites/Default"));
+            lr.material = laserMat;
+            lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            lr.receiveShadows = false;
+            return lr;
         }
 
         IEnumerator Slam(Vector3 at, float radius, float windup, float dmg)
@@ -222,7 +280,7 @@ namespace Lanternfall
                     g.Popup(Pos + Vector3.up * 6f, "RISE, FAITHFUL!", new Color(1f, 0.4f, 0.7f), 22);
                     if (g.Enemies.Count < 6)
                         for (int i = 0; i < (Phase2 ? 4 : 3); i++)
-                            g.SpawnEnemy(i == 0 ? EnemyKind.Archer : EnemyKind.Cultist, Pos + Quaternion.Euler(0, i * 120f + 60f, 0) * Vector3.forward * 4f);
+                            g.SpawnEnemy(i == 0 ? EnemyKind.Gunner : EnemyKind.Cultist, Pos + Quaternion.Euler(0, i * 120f + 60f, 0) * Vector3.forward * 4f);
                     yield return new WaitForSeconds(1.3f);
                     break;
                 }
@@ -362,7 +420,7 @@ namespace Lanternfall
                     Fx.Play("poof", Pos, scale: 0.8f);
                     break;
             }
-            float xp = Kind == EnemyKind.Cultist ? 4 : Kind == EnemyKind.Archer ? 5 : Kind == EnemyKind.Brute ? 22 : 0;
+            float xp = Kind == EnemyKind.Cultist ? 4 : Kind == EnemyKind.Gunner ? 5 : Kind == EnemyKind.Brute ? 22 : 0;
             int shards = Kind == EnemyKind.Brute ? 5 : 1;
             for (int i = 0; i < shards; i++) Pickup.Drop(Pos, xp / shards, 0);
             if (Random.value < (Kind == EnemyKind.Brute ? 1f : 0.12f)) Pickup.Drop(Pos, 0, 30);

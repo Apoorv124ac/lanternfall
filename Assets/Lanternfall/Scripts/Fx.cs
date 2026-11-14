@@ -106,6 +106,8 @@ namespace Lanternfall
         bool loop, following;
         /// <summary>When set, the effect re-aims every frame along this ground direction (projectiles under a moving camera).</summary>
         public Vector3 RollFrom;
+        /// <summary>Seconds before the effect removes itself (0 = play to the end). Used to cut one flash out of a looping muzzle sheet.</summary>
+        public float Lifetime;
         public float Age => t;
 
         public void Init(FxClip c, bool flip, float rollDeg, Transform followTarget, float scale, bool looping, float spd)
@@ -129,6 +131,7 @@ namespace Lanternfall
             if (follow) transform.position = follow.position + followOffset;
             else if (following) { Destroy(gameObject); return; } // target died
             t += Time.deltaTime * speed;
+            if (Lifetime > 0 && t >= Lifetime) { Destroy(gameObject); return; }
             int f = Mathf.FloorToInt(t * clip.Info.Fps);
             if (f >= clip.Info.Frames)
             {
