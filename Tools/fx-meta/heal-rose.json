@@ -1940,7 +1940,7 @@
  "meta": {
   "app": "https://github.com/patch-gg/pixelfx",
   "version": "1",
-  "image": "heal-rose.png",
+  "image": "heal-aoe.png",
   "format": "RGBA8888",
   "size": {
    "w": 1792,

@@ -5,32 +5,40 @@ using UnityEngine.InputSystem;
 
 namespace Lanternfall
 {
-    public enum GameState { Lobby, Playing, Cleared, Defeat }
+    public enum GameState { Title, Playing, LevelUp, Paused, Defeat, Victory }
 
     /// <summary>
-    /// Floor 1 vertical slice. Drop this on an empty GameObject in an empty scene (or use the
-    /// Lanternfall > Create Slice Scene menu) and press Play. Builds camera, lights, arena, Lantern and HUD itself.
+    /// Lanternfall: a third-person co-op action roguelite. Solo you lead the party and the other three heroes
+    /// fight beside you as AI companions; friends can drop in on gamepads and take one over.
+    /// Four floors, the party levels up as it goes, and the Eclipse Herald waits at the bottom.
+    /// Put this on one GameObject in an empty scene (Lanternfall > Create Game Scene does it) and press Play.
     /// </summary>
-    public sealed class Game : MonoBehaviour
+    public sealed partial class Game : MonoBehaviour
     {
         public static Game I { get; private set; }
 
-        public GameState State { get; private set; } = GameState.Lobby;
+        public GameState State { get; private set; } = GameState.Title;
         public readonly List<Hero> Heroes = new List<Hero>();
         public readonly List<Enemy> Enemies = new List<Enemy>();
+        public PartyStats Party { get; private set; } = new PartyStats();
         public Lantern Lantern { get; private set; }
-        public Arena Arena { get; private set; }
+        public Arena World { get; private set; }
+        public CameraRig CamRig { get; private set; }
+        public Hero Leader { get; private set; }
+        public Enemy Boss { get; private set; }
+        public bool BossAlive => Boss != null && !Boss.Dead;
 
-        Camera cam;
-        float camDist = 18f, shakeT, shakeAmp, hitStopT;
-        Vector3 camFocus;
-        int wave, pendingSpawns, kills, reactions;
-        string banner; float bannerT;
-        const int MaxPlayers = 4;
-        static readonly Color Ember = new Color(1f, 0.68f, 0.21f);
-
-        struct Pop { public Vector3 At; public string Text; public Color Color; public float T, Size; }
-        readonly List<Pop> pops = new List<Pop>();
+        int floor, wave, pendingSpawns, kills, reactions, pendingLevels;
+        float hitStopT, runTime;
+        Light sun;
+        Coroutine floorRoutine;
+        bool portalOpen;
+        Vector3 portalPos = new Vector3(0, 0, 12f);
+        FxPlayer portalFx;
+        HeroKind titlePick = HeroKind.Cinder;
+        List<Upgrade> offer = new List<Upgrade>();
+        int offerSel;
+        GameState stateBeforePause;
 
         // ---------------------------------------------------------------- setup
 
@@ -38,241 +46,360 @@ namespace Lanternfall
         {
             I = this;
             Application.targetFrameRate = 60;
-
-            var camGo = new GameObject("Main Camera") { tag = "MainCamera" };
-            cam = camGo.AddComponent<Camera>();
-            cam.clearFlags = CameraClearFlags.SolidColor;
-            cam.backgroundColor = new Color(0.035f, 0.03f, 0.06f);
-            cam.fieldOfView = 32f;
-            cam.nearClipPlane = 0.3f; cam.farClipPlane = 100f;
-            camGo.AddComponent<AudioListener>();
-            camGo.transform.rotation = Quaternion.Euler(52f, 0, 0);
-
+            QualitySettings.shadowDistance = 45f;
+            CamRig = new CameraRig();
+            sun = new GameObject("Sun").AddComponent<Light>();
+            sun.type = LightType.Directional;
+            sun.shadows = LightShadows.Soft;
+            sun.transform.rotation = Quaternion.Euler(50, -35, 0);
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
-            RenderSettings.ambientLight = new Color(0.12f, 0.11f, 0.2f);
-            var moon = new GameObject("Eclipse Light").AddComponent<Light>();
-            moon.type = LightType.Directional;
-            moon.color = new Color(0.45f, 0.42f, 0.75f);
-            moon.intensity = 0.25f;
-            moon.transform.rotation = Quaternion.Euler(60, -30, 0);
-
-            Arena = new Arena(transform);
-            Lantern = Lantern.Create(Vector3.zero);
-            camFocus = Vector3.zero;
-            PlaceCamera(0f);
+            RenderSettings.fog = true;
+            RenderSettings.fogMode = FogMode.ExponentialSquared;
+            BuildFloor(0);
+            Lantern = Lantern.Create();
+            // title-screen lineup
+            for (int i = 0; i < HeroDef.Count; i++)
+            {
+                var h = Hero.Create((HeroKind)i, null, new Vector3((i - 1.5f) * 1.8f, 0, 0));
+                h.Facing = Vector3.back; h.transform.rotation = Quaternion.LookRotation(Vector3.back);
+                Heroes.Add(h);
+            }
+            Leader = Heroes[0];
         }
 
-        // ---------------------------------------------------------------- loop
+        void BuildFloor(int index)
+        {
+            floor = index;
+            World?.Destroy();
+            var def = FloorDef.All[floor];
+            World = new Arena(def, transform);
+            RenderSettings.ambientLight = def.Ambient;
+            RenderSettings.fogColor = def.Fog;
+            RenderSettings.fogDensity = def.FogDensity;
+            CamRig.Cam.backgroundColor = def.Fog;
+            sun.color = def.Sun;
+            sun.intensity = 0.55f;
+        }
+
+        // ---------------------------------------------------------------- run flow
+
+        void StartRun(Controls p1, HeroKind pick)
+        {
+            Party = new PartyStats();
+            kills = 0; reactions = 0; runTime = 0;
+            foreach (var h in Heroes) { h.Input = null; h.FullRestore(); h.UltCharge = 0; }
+            Leader = Heroes.Find(h => h.Def.Kind == pick);
+            Leader.Input = p1;
+            CamRig.Yaw = 0; CamRig.Pitch = 16;
+            EnterFloor(0);
+        }
+
+        void EnterFloor(int index)
+        {
+            if (floorRoutine != null) StopCoroutine(floorRoutine);
+            ClearEnemies();
+            ClosePortal();
+            BuildFloor(index);
+            for (int i = 0; i < Heroes.Count; i++)
+            {
+                var h = Heroes[i];
+                h.transform.position = new Vector3((i - 1.5f) * 1.6f, 0, -12f);
+                h.Facing = Vector3.forward; h.transform.rotation = Quaternion.identity;
+                h.FullRestore();
+            }
+            Lantern.transform.position = Leader.Pos + Vector3.up * 2.3f;
+            CamRig.Yaw = 0;
+            State = GameState.Playing;
+            floorRoutine = StartCoroutine(RunFloor());
+        }
+
+        IEnumerator RunFloor()
+        {
+            var def = FloorDef.All[floor];
+            Banner(def.Name.ToUpper(), 3f, def.Subtitle);
+            yield return new WaitForSeconds(2.5f);
+            int humans = Heroes.FindAll(h => !h.IsAI).Count;
+            float hp = (1f + 0.45f * floor) * (1f + 0.15f * (humans - 1)), dmg = 1f + 0.15f * floor;
+
+            for (wave = 0; wave < def.Waves.Length; wave++)
+            {
+                bool bossWave = def.Boss && wave == def.Waves.Length - 1;
+                if (bossWave)
+                {
+                    Banner("THE ECLIPSE HERALD", 3f, "Servant of the Maw that ate the sun");
+                    var at = new Vector3(0, 0, 10f);
+                    Fx.Play("summon-rise", at, scale: 2.5f);
+                    Fx.Play("eclipse", at + Vector3.up * 7f, scale: 3f);
+                    Shake(1f, 0.2f);
+                    yield return new WaitForSeconds(1.6f);
+                    Boss = Enemy.Spawn(EnemyKind.Boss, at, hp, dmg);
+                    Enemies.Add(Boss);
+                }
+                else
+                {
+                    Banner($"WAVE {wave + 1} / {(def.Boss ? def.Waves.Length - 1 : def.Waves.Length)}", 1.6f);
+                    yield return new WaitForSeconds(1.2f);
+                    foreach (var group in def.Waves[wave])
+                        for (int i = 0; i < group.count; i++)
+                        {
+                            SpawnEnemy(group.kind, World.RandomEdge(Leader.Pos), hp, dmg);
+                            yield return new WaitForSeconds(0.3f);
+                        }
+                }
+                while (pendingSpawns > 0 || Enemies.Count > 0) yield return null;
+                if (bossWave) break;
+                yield return new WaitForSeconds(1.2f);
+            }
+
+            if (def.Boss) { Victory(); yield break; }
+
+            Banner("FLOOR CLEARED", 2.5f, "The ember grows. Step into the light to descend.");
+            foreach (var h in Heroes) { if (h.Downed) h.Revive(1f); else h.Heal(h.MaxHp); }
+            Fx.Play("heal-rose", Leader.Pos, scale: 1.2f);
+            OpenPortal();
+        }
+
+        void OpenPortal()
+        {
+            portalOpen = true;
+            portalFx = Fx.Play("spawn-portal", portalPos, scale: 1.6f, loop: true);
+        }
+
+        void ClosePortal()
+        {
+            portalOpen = false;
+            if (portalFx) portalFx.Stop();
+        }
+
+        public void SpawnEnemy(EnemyKind kind, Vector3 at, float hpScale = -1, float dmgScale = -1)
+        {
+            if (hpScale < 0) { hpScale = 1f + 0.45f * floor; dmgScale = 1f + 0.15f * floor; }
+            StartCoroutine(SpawnOne(kind, World.Resolve(at, 0.6f), hpScale, dmgScale));
+        }
+
+        IEnumerator SpawnOne(EnemyKind kind, Vector3 at, float hp, float dmg)
+        {
+            pendingSpawns++;
+            Fx.Play("spawn-portal", at, scale: kind == EnemyKind.Brute ? 1f : 0.7f);
+            yield return new WaitForSeconds(0.8f);
+            if (State == GameState.Playing || State == GameState.LevelUp) Enemies.Add(Enemy.Spawn(kind, at, hp, dmg));
+            pendingSpawns--;
+        }
+
+        void ClearEnemies()
+        {
+            StopAllCoroutines();
+            floorRoutine = null;
+            foreach (var e in Enemies) if (e) Destroy(e.gameObject);
+            Enemies.Clear();
+            foreach (var t in Telegraph.Active.ToArray()) if (t) Destroy(t.gameObject);
+            foreach (var p in FindObjectsByType<Projectile>(FindObjectsSortMode.None)) Destroy(p.gameObject);
+            foreach (var p in FindObjectsByType<Pickup>(FindObjectsSortMode.None)) Destroy(p.gameObject);
+            pendingSpawns = 0;
+            Boss = null;
+        }
+
+        void Victory()
+        {
+            State = GameState.Victory;
+            RenderSettings.ambientLight = Util.Hex("#8a6a50");
+            RenderSettings.fogColor = Util.Hex("#f2b07a");
+            RenderSettings.fogDensity = 0.012f;
+            CamRig.Cam.backgroundColor = Util.Hex("#f2b07a");
+            sun.color = Util.Hex("#ffd9a0"); sun.intensity = 1.2f;
+            Fx.Play("sunburst", Leader.Pos + Vector3.up * 3f, scale: 4f);
+            Banner("THE SUN RISES AGAIN", 999f);
+        }
+
+        // ---------------------------------------------------------------- frame
 
         void Update()
         {
             float udt = Time.unscaledDeltaTime;
             hitStopT -= udt;
-            Time.timeScale = hitStopT > 0 ? 0.05f : 1f;
-
-            PollJoins();
+            bool paused = State == GameState.LevelUp || State == GameState.Paused;
+            Time.timeScale = paused ? 0f : hitStopT > 0 ? 0.05f : 1f;
 
             switch (State)
             {
-                case GameState.Lobby:
-                    if (Heroes.Count > 0 && Controls.StartPressed()) StartCoroutine(RunFloor());
+                case GameState.Title: TitleUpdate(udt); break;
+                case GameState.Playing: PlayingUpdate(); break;
+                case GameState.LevelUp: LevelUpUpdate(); break;
+                case GameState.Paused:
+                    if (Controls.PausePressed()) State = stateBeforePause;
                     break;
-                case GameState.Playing:
-                    if (Heroes.Count > 0 && Heroes.TrueForAll(h => h.Downed))
-                    {
-                        State = GameState.Defeat;
-                        Banner("THE EMBER GUTTERS", 999f);
-                        StopAllCoroutines();
-                    }
-                    break;
-                case GameState.Cleared:
                 case GameState.Defeat:
-                    if (Controls.StartPressed()) ResetRun();
+                    if (Leader.Input.Confirm) { State = GameState.Playing; EnterFloor(floor); }
+                    break;
+                case GameState.Victory:
+                    if (Leader.Input.Confirm) ToTitle();
                     break;
             }
 
-            for (int i = pops.Count - 1; i >= 0; i--)
-            {
-                var p = pops[i]; p.T += udt; p.At += Vector3.up * udt * 0.8f; pops[i] = p;
-                if (p.T > 1.1f) pops.RemoveAt(i);
-            }
-            bannerT -= udt;
+            // cursor: locked while the mouse player is fighting
+            bool wantLock = State == GameState.Playing && Leader != null && Leader.Input != null && Leader.Input.UsesMouse;
+            Cursor.lockState = wantLock ? CursorLockMode.Locked : CursorLockMode.None;
+            Cursor.visible = !wantLock;
+
+            TickPops(udt);
         }
 
-        void LateUpdate() => PlaceCamera(Time.unscaledDeltaTime);
-
-        void PlaceCamera(float dt)
+        void LateUpdate()
         {
-            Vector3 sum = Lantern ? Lantern.Pos : Vector3.zero; int n = 1;
-            float minX = sum.x, maxX = sum.x, minZ = sum.z, maxZ = sum.z;
-            foreach (var h in Heroes)
-            {
-                if (h.Downed) continue;
-                sum += h.Pos; n++;
-                minX = Mathf.Min(minX, h.Pos.x); maxX = Mathf.Max(maxX, h.Pos.x);
-                minZ = Mathf.Min(minZ, h.Pos.z); maxZ = Mathf.Max(maxZ, h.Pos.z);
-            }
-            var target = sum / n;
-            target.x = Mathf.Clamp(target.x, -5f, 5f);
-            target.z = Mathf.Clamp(target.z, -3f, 2f);
-            float spread = Mathf.Max(maxX - minX, (maxZ - minZ) * 1.6f);
-            float wantDist = Mathf.Clamp(17f + spread * 0.55f, 17f, 27f);
-            float k = dt <= 0 ? 1 : 1f - Mathf.Exp(-4f * dt);
-            camFocus = Vector3.Lerp(camFocus, target, k);
-            camDist = Mathf.Lerp(camDist, wantDist, k);
-
-            var rot = cam.transform.rotation;
-            var pos = camFocus + rot * new Vector3(0, 0, -camDist);
-            if (shakeT > 0)
-            {
-                shakeT -= dt;
-                pos += (Vector3)(Random.insideUnitCircle * shakeAmp);
-            }
-            cam.transform.position = pos;
+            float udt = Time.unscaledDeltaTime;
+            if (State == GameState.Title) CamRig.Orbit(new Vector3(0, 0, 0), 7.5f, 1.3f, udt);
+            else CamRig.Follow(Leader, BossAlive, udt);
         }
 
-        // ---------------------------------------------------------------- players
-
-        void PollJoins()
+        void TitleUpdate(float udt)
         {
-            if (State != GameState.Lobby && State != GameState.Playing) return;
-            if (Heroes.Count >= MaxPlayers) return;
+            runTime += udt;
+            // whoever touches a device picks a hero and becomes P1
+            Controls who = null;
+            foreach (var pad in Gamepad.all)
+            {
+                var c = new GamepadControls(pad);
+                int nx = PadNav(pad);
+                if (nx != 0) titlePick = (HeroKind)(((int)titlePick + nx + HeroDef.Count) % HeroDef.Count);
+                if (c.AnyJoin) who = c;
+            }
+            var k = Keyboard.current;
+            if (k != null)
+            {
+                if (k.aKey.wasPressedThisFrame || k.leftArrowKey.wasPressedThisFrame) titlePick = (HeroKind)(((int)titlePick + 3) % 4);
+                if (k.dKey.wasPressedThisFrame || k.rightArrowKey.wasPressedThisFrame) titlePick = (HeroKind)(((int)titlePick + 1) % 4);
+                if (k.enterKey.wasPressedThisFrame || k.spaceKey.wasPressedThisFrame || k.numpadEnterKey.wasPressedThisFrame) who = new KeyboardControls(0);
+            }
+            if (titleClick >= 0) { titlePick = (HeroKind)titleClick; titleClick = -1; who = new KeyboardControls(0); }
 
+            for (int i = 0; i < Heroes.Count; i++)
+            {
+                var h = Heroes[i];
+                bool sel = (int)h.Def.Kind == (int)titlePick;
+                var want = new Vector3((i - 1.5f) * 1.8f, 0, sel ? -0.8f : 0);
+                h.transform.position = Vector3.Lerp(h.transform.position, want, 1f - Mathf.Exp(-8f * udt));
+                var toCam = Util.Flat(CamRig.Cam.transform.position - h.Pos).normalized;
+                h.transform.rotation = Quaternion.LookRotation(toCam);
+            }
+            if (who != null) StartRun(who, titlePick);
+        }
+
+        readonly Dictionary<Gamepad, float> padNav = new Dictionary<Gamepad, float>();
+        int PadNav(Gamepad pad)
+        {
+            float x = pad.leftStick.ReadValue().x + pad.dpad.ReadValue().x;
+            padNav.TryGetValue(pad, out float last);
+            padNav[pad] = x;
+            if (x > 0.6f && last <= 0.6f) return 1;
+            if (x < -0.6f && last >= -0.6f) return -1;
+            return 0;
+        }
+
+        void PlayingUpdate()
+        {
+            runTime += Time.deltaTime;
+            if (Controls.PausePressed()) { stateBeforePause = State; State = GameState.Paused; return; }
+            PollDropIn();
+
+            if (pendingLevels > 0) { OpenLevelUp(); return; }
+
+            if (portalOpen && (Leader.Pos - portalPos).magnitude < 2.2f && floor + 1 < FloorDef.All.Length)
+            {
+                Fx.Play("blink-out", Leader.Pos, scale: 1.2f);
+                EnterFloor(floor + 1);
+                return;
+            }
+
+            if (Heroes.TrueForAll(h => h.Downed))
+            {
+                State = GameState.Defeat;
+                Banner("THE EMBER GUTTERS", 999f, "Press Enter / A to try this floor again. Your levels are kept.");
+            }
+        }
+
+        void PollDropIn()
+        {
             foreach (var pad in Gamepad.all)
             {
                 if (Heroes.Exists(h => h.Input is GamepadControls gc && gc.Pad == pad)) continue;
                 var c = new GamepadControls(pad);
-                if (c.AnyJoin) { Join(c); return; }
+                if (!c.AnyJoin) continue;
+                var ai = Heroes.Find(h => h.IsAI);
+                if (ai == null) return;
+                ai.Input = c;
+                Popup(ai.Pos + Vector3.up * 2.4f, $"Player joined as {ai.Def.Name}", ai.Def.Accent, 18);
+                return;
             }
-            for (int layout = 0; layout < 2; layout++)
+            var k = Keyboard.current;
+            if (k != null && !Heroes.Exists(h => h.Input is KeyboardControls kc && kc.Layout == 1) && (k.commaKey.wasPressedThisFrame || k.slashKey.wasPressedThisFrame))
             {
-                if (Heroes.Exists(h => h.Input is KeyboardControls kc && kc.Layout == layout)) continue;
-                var c = new KeyboardControls(layout);
-                if (c.AnyJoin) { Join(c); return; }
+                var ai = Heroes.Find(h => h.IsAI);
+                if (ai != null) { ai.Input = new KeyboardControls(1); Popup(ai.Pos + Vector3.up * 2.4f, $"Player joined as {ai.Def.Name}", ai.Def.Accent, 18); }
             }
         }
 
-        void Join(Controls c)
+        void ToTitle()
         {
-            int slot = 0;
-            while (Heroes.Exists(h => h.Slot == slot)) slot++;
-            var kind = FreeKind(HeroKind.Cinder);
-            var spawn = Lantern.Pos + Quaternion.Euler(0, slot * 90f + 45f, 0) * Vector3.forward * 2f;
-            var hero = Hero.Create(kind, c, slot, Arena.Resolve(spawn, 0.5f));
-            hero.AttackCd = 0.3f; // the join press shouldn't also fire
-            Heroes.Add(hero);
-            Fx.Play("spawn-portal", hero.Pos, scale: 0.5f);
-            Popup(hero.Pos + Vector3.up * 2.4f, $"P{slot + 1} {hero.Def.Name}", hero.Def.Accent);
-        }
-
-        HeroKind FreeKind(HeroKind start)
-        {
-            for (int i = 0; i < HeroDef.Count; i++)
-            {
-                var k = (HeroKind)(((int)start + i) % HeroDef.Count);
-                if (!Heroes.Exists(h => h.Def.Kind == k)) return k;
-            }
-            return start;
-        }
-
-        public void CycleHero(Hero h)
-        {
-            var next = (HeroKind)(((int)h.Def.Kind + 1) % HeroDef.Count);
-            for (int i = 0; i < HeroDef.Count; i++)
-            {
-                if (!Heroes.Exists(o => o != h && o.Def.Kind == next)) break;
-                next = (HeroKind)(((int)next + 1) % HeroDef.Count);
-            }
-            h.SetKind(next);
-            Fx.Play("poof", h.Pos, scale: 0.5f);
-            Popup(h.Pos + Vector3.up * 2.4f, h.Def.Name, h.Def.Accent);
-        }
-
-        // ---------------------------------------------------------------- floor flow
-
-        IEnumerator RunFloor()
-        {
-            State = GameState.Playing;
-            kills = 0; reactions = 0;
-            int players = Heroes.Count;
-            float count = 0.6f + 0.4f * players, hp = 1f + 0.25f * (players - 1);
-
-            var waves = new[]
-            {
-                new[] { (EnemyKind.Shade, 6) },
-                new[] { (EnemyKind.Shade, 8), (EnemyKind.Skullwing, 2) },
-                new[] { (EnemyKind.Shade, 8), (EnemyKind.Skullwing, 3), (EnemyKind.EliteShade, 1) },
-            };
-
-            for (wave = 0; wave < waves.Length; wave++)
-            {
-                Banner(wave == waves.Length - 1 ? "FINAL WAVE" : $"WAVE {wave + 1}", 2f);
-                yield return new WaitForSeconds(1.6f);
-                foreach (var group in waves[wave])
-                {
-                    var kind = group.Item1; int baseN = group.Item2;
-                    int n = kind == EnemyKind.EliteShade ? baseN : Mathf.Max(1, Mathf.RoundToInt(baseN * count));
-                    for (int i = 0; i < n; i++)
-                    {
-                        StartCoroutine(SpawnOne(kind, hp));
-                        yield return new WaitForSeconds(0.35f);
-                    }
-                }
-                while (pendingSpawns > 0 || Enemies.Count > 0) yield return null;
-                yield return new WaitForSeconds(0.8f);
-            }
-
-            State = GameState.Cleared;
-            Banner("FLOOR 1 CLEARED", 999f);
-            Lantern.BaseRadius = 6.5f; // the ember grows
-        }
-
-        IEnumerator SpawnOne(EnemyKind kind, float hpScale)
-        {
-            pendingSpawns++;
-            Vector3 at = Arena.RandomEdge();
-            for (int tries = 0; tries < 6; tries++) // not right on top of a hero
-            {
-                if (!Heroes.Exists(h => (h.Pos - at).sqrMagnitude < 9f)) break;
-                at = Arena.RandomEdge();
-            }
-            Fx.Play("spawn-portal", at, scale: kind == EnemyKind.EliteShade ? 1f : 0.6f);
-            yield return new WaitForSeconds(0.9f);
-            if (State == GameState.Playing) Enemies.Add(Enemy.Spawn(kind, at, hpScale));
-            pendingSpawns--;
-        }
-
-        void ResetRun()
-        {
-            StopAllCoroutines();
-            foreach (var e in Enemies) if (e) Destroy(e.gameObject);
-            Enemies.Clear();
-            pendingSpawns = 0;
-            foreach (var h in Heroes) { h.Downed = false; h.Hp = h.Def.MaxHp; h.SpecialCd = 0; }
-            Lantern.Drop();
-            State = GameState.Lobby;
+            ClearEnemies();
+            ClosePortal();
+            BuildFloor(0);
+            State = GameState.Title;
             banner = null;
+            for (int i = 0; i < Heroes.Count; i++) { Heroes[i].Input = null; Heroes[i].FullRestore(); Heroes[i].transform.position = new Vector3((i - 1.5f) * 1.8f, 0, 0); }
         }
 
-        public void OnEnemyDied(Enemy e)
+        // ---------------------------------------------------------------- progression
+
+        public void GainXp(float xp)
         {
-            Enemies.Remove(e);
-            kills++;
+            int gained = Party.AddXp(xp);
+            if (gained > 0)
+            {
+                pendingLevels += gained;
+                Fx.Play("level-up", Leader.Pos, scale: 1.1f);
+                foreach (var h in Heroes) { if (h.Downed) h.Revive(0.5f); h.Heal(h.MaxHp * 0.3f, false); }
+            }
+        }
+
+        void OpenLevelUp()
+        {
+            offer = Upgrade.Roll(Party, 3);
+            if (offer.Count == 0) { pendingLevels = 0; return; }
+            offerSel = 1 % offer.Count;
+            State = GameState.LevelUp;
+        }
+
+        void LevelUpUpdate()
+        {
+            var input = Leader.Input;
+            int nx = input.NavX();
+            if (nx != 0) offerSel = (offerSel + nx + offer.Count) % offer.Count;
+            if (offerClick >= 0) { offerSel = offerClick; offerClick = -1; Choose(); return; }
+            if (input.Confirm || (input is KeyboardControls kc && kc.Layout == 0 && Keyboard.current != null && Keyboard.current.enterKey.wasPressedThisFrame)) Choose();
+        }
+
+        void Choose()
+        {
+            var u = offer[offerSel];
+            u.Take(Party);
+            if (u.Id == "heart") foreach (var h in Heroes) h.Heal(h.MaxHp, false);
+            Popup(Leader.Pos + Vector3.up * 2.6f, u.Name.ToUpper(), u.Color, 24);
+            pendingLevels--;
+            State = GameState.Playing;
         }
 
         // ---------------------------------------------------------------- queries & combat helpers
 
-        /// <summary>Nearest living enemy in range. With a facing, enemies in front are preferred.</summary>
-        public Enemy NearestEnemy(Vector3 from, float range, Vector3 facing, List<Enemy> exclude = null, float minDot = -1f)
+        /// <summary>Nearest living enemy in range. With a direction, enemies in front are preferred and those behind (dot below minDot) skipped.</summary>
+        public Enemy NearestEnemy(Vector3 from, float range, Vector3 dir, List<Enemy> exclude = null, float minDot = -1f)
         {
             Enemy best = null; float bestScore = float.MaxValue;
             foreach (var e in Enemies)
             {
                 if (e.Dead || (exclude != null && exclude.Contains(e))) continue;
-                var to = e.Pos - from;
-                float d = to.magnitude;
+                var to = Util.Flat(e.Pos - from); float d = to.magnitude;
                 if (d > range) continue;
-                float dot = facing == Vector3.zero || d < 0.01f ? 1f : Vector3.Dot(to / d, facing);
+                float dot = dir == Vector3.zero || d < 0.01f ? 1f : Vector3.Dot(to / d, dir.normalized);
                 if (dot < minDot) continue;
                 float score = d * (1.6f - 0.6f * dot);
                 if (score < bestScore) { bestScore = score; best = e; }
@@ -280,11 +407,17 @@ namespace Lanternfall
             return best;
         }
 
-        public Hero NearestDowned(Hero me, float reach)
+        public Enemy RandomEnemy(Vector3 from, float range)
         {
-            foreach (var h in Heroes)
-                if (h != me && h.Downed && (h.Pos - me.Pos).sqrMagnitude < reach * reach) return h;
-            return null;
+            var list = Enemies.FindAll(e => !e.Dead && (e.Pos - from).sqrMagnitude < range * range);
+            return list.Count == 0 ? null : list[Random.Range(0, list.Count)];
+        }
+
+        public int CountEnemies(Vector3 at, float r)
+        {
+            int n = 0;
+            foreach (var e in Enemies) if (!e.Dead && (e.Pos - at).sqrMagnitude < (r + e.Radius) * (r + e.Radius)) n++;
+            return n;
         }
 
         public void HitArea(Hero src, Vector3 at, float radius, Hit hit, Enemy exclude = null)
@@ -297,105 +430,21 @@ namespace Lanternfall
             }
         }
 
-        public void HitStop(float t) => hitStopT = Mathf.Max(hitStopT, t);
-        public void Shake(float t, float amp)
+        public void OnEnemyDied(Enemy e)
         {
-            if (shakeT <= 0) shakeAmp = 0;
-            shakeT = Mathf.Max(shakeT, t);
-            shakeAmp = Mathf.Max(shakeAmp, amp);
+            Enemies.Remove(e);
+            kills++;
         }
+
+        public void HitStop(float t) => hitStopT = Mathf.Max(hitStopT, t);
+        public void Shake(float t, float amp) => CamRig.Shake(t, amp);
 
         public void Reaction(string name, Vector3 at, Color c)
         {
             reactions++;
-            HitStop(0.1f);
-            Shake(0.3f, 0.25f);
-            pops.Add(new Pop { At = at + Vector3.up * 2.6f, Text = name + "!", Color = c, Size = 30 });
-        }
-
-        public void Popup(Vector3 at, string text, Color c) => pops.Add(new Pop { At = at, Text = text, Color = c, Size = 18 });
-
-        public void DamageNumber(Vector3 at, float dmg) =>
-            pops.Add(new Pop { At = at + (Vector3)(Random.insideUnitCircle * 0.3f), Text = Mathf.RoundToInt(dmg).ToString(), Color = new Color(1f, 0.95f, 0.85f), Size = 14 });
-
-        void Banner(string text, float t) { banner = text; bannerT = t; }
-
-        // ---------------------------------------------------------------- HUD (IMGUI placeholder; move to UI Toolkit later)
-
-        GUIStyle label;
-
-        void OnGUI()
-        {
-            float s = Screen.height / 720f;
-            GUI.matrix = Matrix4x4.Scale(new Vector3(s, s, 1));
-            float W = Screen.width / s, H = 720f;
-            if (label == null) label = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter, richText = true };
-
-            // world popups
-            foreach (var p in pops)
-            {
-                var sp = cam.WorldToScreenPoint(p.At);
-                if (sp.z < 0) continue;
-                float a = 1f - Mathf.Clamp01((p.T - 0.7f) / 0.4f);
-                Text(new Rect(sp.x / s - 120, (Screen.height - sp.y) / s - 20, 240, 40), p.Text, p.Color * new Color(1, 1, 1, a), (int)p.Size);
-            }
-
-            // player cards
-            for (int i = 0; i < Heroes.Count; i++)
-            {
-                var h = Heroes[i];
-                float x = 16 + h.Slot * 220, y = H - 88;
-                Fill(new Rect(x, y, 204, 72), new Color(0.05f, 0.04f, 0.09f, 0.85f));
-                Fill(new Rect(x, y, 4, 72), h.Def.Accent);
-                Text(new Rect(x + 12, y + 4, 190, 22), $"P{h.Slot + 1}  {h.Def.Name.ToUpper()}  <size=11>{h.Def.Role}</size>", Color.white, 15, TextAnchor.MiddleLeft);
-                Fill(new Rect(x + 12, y + 30, 180, 10), new Color(0.2f, 0.1f, 0.12f));
-                Fill(new Rect(x + 12, y + 30, 180 * Mathf.Clamp01(h.Hp / h.Def.MaxHp), 10), h.Downed ? Color.gray : new Color(0.9f, 0.3f, 0.35f));
-                Fill(new Rect(x + 12, y + 44, 180, 6), new Color(0.15f, 0.15f, 0.2f));
-                Fill(new Rect(x + 12, y + 44, 180 * h.SpecialReady, 6), h.SpecialReady >= 1 ? h.Def.Accent : h.Def.Accent * 0.5f);
-                string status = h.Downed ? (h.ReviveProgress > 0 ? $"REVIVING {Mathf.RoundToInt(h.ReviveProgress * 100)}%" : "DOWN · ally hold Lantern button")
-                    : h.Carrying ? "CARRYING THE LANTERN" : $"{h.Def.SpecialName} {(h.SpecialReady >= 1 ? "ready" : "")}";
-                Text(new Rect(x + 12, y + 50, 190, 20), status, h.Downed ? new Color(1, 0.5f, 0.5f) : new Color(0.8f, 0.78f, 0.9f), 11, TextAnchor.MiddleLeft);
-            }
-
-            // top line
-            if (State == GameState.Playing)
-                Text(new Rect(0, 8, W, 26), $"FLOOR 1 · WAVE {Mathf.Min(wave + 1, 3)}/3 · {Enemies.Count + pendingSpawns} left · reactions {reactions}", new Color(0.85f, 0.82f, 0.95f), 15);
-
-            if (State == GameState.Lobby)
-            {
-                Text(new Rect(0, 70, W, 70), "LANTERNFALL", Ember, 56);
-                Text(new Rect(0, 136, W, 30), "Gamepad: press A / ✕ to join  ·  Keyboard: J (WASD player) or , (arrow-keys player)", Color.white, 16);
-                Text(new Rect(0, 162, W, 26), "Special button cycles your hero here  ·  Start / Enter begins the descent", new Color(0.8f, 0.78f, 0.9f), 14);
-                Text(new Rect(0, 186, W, 26), "In play: Attack X/J · Special Y/K · Lantern pick up / throw / revive A/L", new Color(0.65f, 0.62f, 0.78f), 13);
-            }
-
-            if (banner != null && bannerT > 0)
-            {
-                Text(new Rect(0, H * 0.32f, W, 70), banner, State == GameState.Defeat ? new Color(1, 0.4f, 0.45f) : Ember, 46);
-                if (State == GameState.Cleared)
-                    Text(new Rect(0, H * 0.32f + 64, W, 30), $"{kills} shades banished · {reactions} Kindred Reactions · the ember burns brighter  ·  Start / Enter to play again", Color.white, 16);
-                if (State == GameState.Defeat)
-                    Text(new Rect(0, H * 0.32f + 64, W, 30), "Start / Enter to try again", Color.white, 16);
-            }
-        }
-
-        void Text(Rect r, string t, Color c, int size, TextAnchor anchor = TextAnchor.MiddleCenter)
-        {
-            label.fontSize = size;
-            label.alignment = anchor;
-            var shadow = r; shadow.x += 2; shadow.y += 2;
-            label.normal.textColor = new Color(0, 0, 0, c.a * 0.8f);
-            GUI.Label(shadow, t, label);
-            label.normal.textColor = c;
-            GUI.Label(r, t, label);
-        }
-
-        static void Fill(Rect r, Color c)
-        {
-            var old = GUI.color;
-            GUI.color = c;
-            GUI.DrawTexture(r, Texture2D.whiteTexture);
-            GUI.color = old;
+            HitStop(0.08f);
+            Shake(0.25f, 0.2f);
+            Popup(at + Vector3.up * 2.6f, name + "!", c, 30);
         }
     }
 }

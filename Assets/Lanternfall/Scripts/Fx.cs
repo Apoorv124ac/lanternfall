@@ -89,7 +89,7 @@ namespace Lanternfall
             var cam = Camera.main;
             Vector3 right = cam ? cam.transform.right : Vector3.right;
             Vector3 up = cam ? Vector3.ProjectOnPlane(cam.transform.up, Vector3.up).normalized : Vector3.forward;
-            float x = Vector3.Dot(groundDir, right), y = Vector3.Dot(groundDir, up) * 0.6f; // squash depth: camera is tilted
+            float x = Vector3.Dot(groundDir, right), y = Vector3.Dot(groundDir, up) * 0.35f; // squash depth: the camera looks along the floor
             flip = x < 0f;
             float a = Mathf.Atan2(y, Mathf.Abs(x)) * Mathf.Rad2Deg;
             return flip ? -a : a;
@@ -104,6 +104,8 @@ namespace Lanternfall
         Vector3 followOffset;
         float t, speed, roll;
         bool loop, following;
+        /// <summary>When set, the effect re-aims every frame along this ground direction (projectiles under a moving camera).</summary>
+        public Vector3 RollFrom;
         public float Age => t;
 
         public void Init(FxClip c, bool flip, float rollDeg, Transform followTarget, float scale, bool looping, float spd)
@@ -134,6 +136,7 @@ namespace Lanternfall
                 f %= clip.Info.Frames;
             }
             sr.sprite = clip.Frames[f];
+            if (RollFrom != Vector3.zero) { roll = Fx.RollFor(RollFrom, out bool fl); sr.flipX = fl; }
             Billboard.Face(transform, roll);
         }
     }

@@ -1,72 +1,74 @@
 # Lanternfall
 
-Couch co-op action roguelite for 1–4 players. The Eclipse Maw swallowed the sun, and the Lanternbearers carry the last ember down through the dark. 2.5D in Unity, with pixel art effects from [patch-gg/pixelfx](https://github.com/patch-gg/pixelfx) (MIT) played as sprite-sheet billboards.
+A third-person co-op action roguelite. The Eclipse Maw swallowed the sun, and four Lanternbearers carry the last ember down four floors to light it again. Built in Unity, with pixel art effects from [patch-gg/pixelfx](https://github.com/patch-gg/pixelfx) (MIT) played as billboards.
 
 ## Open it
 
-1. Install **Unity 6.3 LTS (6000.3.28f1)** from Unity Hub (newer Unity 6 versions also work).
-2. Clone this repo, then in Unity Hub choose **Add → Add project from disk** and pick the repo folder.
-3. Unity installs the Input System package. If it asks to enable the new input backends, click **Yes** (the Editor restarts).
-4. On first open the project builds `Assets/Lanternfall/Lanternfall.unity` and opens it. If you don't see it, use the **Lanternfall → Open Slice Scene** menu.
-5. Press **Play**.
+1. Install **Unity 6.3 LTS (6000.3.28f1)** from Unity Hub. Newer Unity 6 versions also work.
+2. Get this repo onto your PC with GitHub Desktop (**File → Clone**) or **Code → Download ZIP**.
+3. In Unity Hub choose **Add → Add project from disk** and pick the folder.
+4. If Unity asks to enable the new Input System backends, click **Yes**.
+5. The game scene builds itself on first open. If you don't see it, use **Lanternfall → Open Game Scene**. Then press **Play**.
 
-## Play the slice (Floor 1)
+> Already had the old slice open? Delete `Assets/Lanternfall/Lanternfall.unity`, then run **Lanternfall → Create Game Scene**.
 
-| | Gamepad | Keyboard P1 | Keyboard P2 |
-|---|---|---|---|
-| Join | A / ✕ | J | , |
-| Move | Stick or d-pad | WASD | Arrows |
-| Attack (hold) | X / □ or RT | J | , |
-| Special | Y / △ or RB | K | . |
-| Lantern: pick up / throw · revive (hold near a downed ally) | A / ✕ | L | / |
-| Begin / restart | Start | Enter | Enter |
+## How to play
 
-In the lobby the Special button cycles your hero. Up to 4 players can join, and joining mid-floor works too.
+On the title screen, pick your hero with **A / D** (or the left stick) and press **Enter / A**. The other three heroes fight beside you as AI companions. A friend can press **A** on a second gamepad at any time to take one of them over.
+
+| | Keyboard + mouse | Gamepad |
+|---|---|---|
+| Move | WASD | Left stick |
+| Camera | Mouse | Right stick |
+| Attack (hold) | Left mouse | X / □ or RT |
+| Special | Right mouse or E | Y / △ or RB |
+| Ultimate (charges as you deal damage) | Q | LB or LT |
+| Dodge roll (you can't be hit mid-roll) | Space | B / ○ |
+| Revive a downed ally (hold) | F | A / ✕ |
+| Pause / controls | Esc | Start |
+
+**The run:** there are four floors: Ashen Gate, Frozen Cloister, Storm Spire and the Maw's Throne. Each floor has waves of the Eclipse cult. Clearing a floor fully heals the party and opens a portal to the next one. The **Eclipse Herald** boss waits at the bottom. Its attack patterns are slams, orb volleys, summoning, and in phase 2 the Eclipse Nova.
+
+**Growing stronger:** enemies drop ember shards (XP). On every level-up the game pauses and you pick one of three blessings for the whole party. They include more damage, faster attacks, faster specials, more HP, extra projectiles, a bigger area, lifesteal, faster ultimates and a brighter Lantern. Bosses fall to a party that has levelled up.
+
+**Staying alive:** every enemy attack shows a **red circle** on the floor first, so roll out of it. Standing in the Lantern's light heals you, and enemies outside the light hit 50% harder. Downed heroes get back up on their own after 10 seconds, or sooner if someone revives them. If the whole party goes down, you retry the floor and keep your levels.
 
 **Heroes**
-- **Cinder** (fire, burst): Fireball applies *Burning*. Fire Ring is an AoE burst around you.
-- **Rime** (ice, tank): Ice Lance chills, and 3 chills *Freeze* a target. Frost Nova freezes everything nearby.
-- **Volt** (lightning, ranged): Zap is an auto-target hit that *Stuns* briefly. Chain Lightning hops across up to 5 enemies.
-- **Sol** (holy, healer): Smite applies *Exposed* (+25% damage taken). Rose Mend heals and revives allies around you. **Dawnlight:** the Lantern's light reaches 50% further while Sol carries it.
+- **Cinder** (fire): Fireball, Fire Ring, and the ultimate **Meteor Rain**.
+- **Rime** (ice tank, draws enemy attention): Ice Lance, Frost Nova (freezes), and the ultimate **Blizzard**, a vortex that pulls enemies in.
+- **Volt** (lightning): auto-targeting Zap, Chain Lightning, and the ultimate **Thunder God**.
+- **Sol** (holy healer): Smite (enemies hit take +25% damage), Rose Mend (heals and revives), and the ultimate **Dawnbreak**, which revives and fully heals everyone.
 
-**Kindred Reactions** (the combo hook)
-- **Shatter:** fire or lightning on a *Frozen* enemy deals 2.5× damage and sprays shards at its neighbours.
-- **Overload:** lightning on a *Burning* enemy blows up, damaging and stunning everything around it.
+**Kindred Reactions**
+- **Shatter:** fire or lightning on a frozen enemy deals 2.5× damage and sprays shards.
+- **Overload:** lightning on a burning enemy causes an explosion that stuns everything around it.
 
-**The Lantern** lights the arena. Enemies standing outside its light hit 50% harder, so stay together. Carrying it slows you and blocks your abilities, and Skullwings dive at whoever holds it. Throw it to reposition the light.
+## Characters and art
 
-Floor 1 has three waves: Shades, then Skullwings, then an Elite Shade. Enemy count and HP scale with the number of players.
+The heroes and the Eclipse cult (Cultist, Archer, Brute, Herald) are 3D humanoids built and animated in code (`Humanoid.cs`). That means the game runs with zero art assets. To use real rigged models instead:
 
-## How it's built
+1. Import a rigged humanoid. Free options are Unity's *Starter Assets – ThirdPerson* (Asset Store) or characters from mixamo.com.
+2. Run **Lanternfall → Create Character Art Config**.
+3. Drag a character prefab into any slot (Cinder … Boss).
 
-Everything is built from code. `Game` creates the camera, lights, arena, Lantern and HUD, so the scene only holds one GameObject.
+Filled slots use your model, and empty slots keep the built-in one. Animator controllers with a `Speed` float (like Starter Assets) get walk/run driven automatically.
+
+## Code map
 
 ```
-Assets/Lanternfall/
-  Scripts/
-    Game.cs        state, joining, waves, camera, hit-stop/shake, HUD (IMGUI placeholder)
-    Hero.cs        movement, Lantern carry/throw, revive, the 4 heroes' abilities
-    Enemy.cs       Shade / Skullwing / Elite AI, statuses, Kindred Reactions
-    Lantern.cs     the shared light, carry/throw, Dawnlight
-    Fx.cs          loads pixelfx sheets, plays them as billboards (FxPlayer)
-    FxData.cs      generated table of sheet metadata (fps, pivot, act contact time)
-    PixelArt.cs    placeholder hero/enemy sprites drawn in code at pixelfx scale (24x38)
-    Arena.cs, Actor.cs, Projectile.cs, Controls.cs, HeroDef.cs
-  Resources/FX/    pixelfx sprite sheets (PNG)
-  Editor/          import settings for the sheets (point filter, no compression) + scene setup
-Tools/
-  render-fx.sh     re-render the sheets from a pixelfx checkout and regenerate FxData.cs
-  fx-meta/         the Aseprite-style JSON each sheet came with
+Assets/Lanternfall/Scripts/
+  Game.cs        run flow: title, floors, waves, boss, level-ups, drop-in co-op
+  HUD.cs         all UI (IMGUI placeholder): title, hero cards, bars, level-up cards, pause
+  CameraRig.cs   over-the-shoulder follow camera + aim assist
+  Hero.cs        movement, dodge, abilities, ultimates, companion AI
+  Enemy.cs       cult AI, telegraphed attacks, boss patterns, statuses, Kindred Reactions
+  Humanoid.cs    procedural character bodies + animation (or a rigged model)
+  CharacterArt.cs, CharacterArtConfig.cs  looks per character, optional model slots
+  World.cs       floor themes, waves, arena builder
+  Combat.cs      hits, telegraphs, pickups, projectiles, lightning bolts, the Lantern
+  Upgrades.cs    party XP, levels, blessings
+  Fx.cs, FxData.cs  pixelfx sheet loading and billboard playback
+Tools/render-fx.sh  re-render the pixelfx sheets and regenerate FxData.cs
 ```
-
-Notes:
-- 24 pixels = 1 world unit, so pixelfx effects and characters share one pixel scale.
-- Special damage lands on the effect's own contact frame (`meta.pixelfx.act`), and reactions add hit-stop and screen shake.
-- Built-in render pipeline by default. URP also works, because the sprites use `Sprites/Default` and the arena uses primitive default materials.
-- The heroes and enemies are placeholder art drawn in code. Replace `PixelArt` with real sheets when the art exists.
-
-## Next up
-
-Real character sheets and animation, Steam Veil / Firestorm / Dawnbreak / Conduit, floors 2–4 and the Eclipse Maw boss, Bramble as the first unlock, a UI Toolkit HUD, audio, and online co-op later.
 
 Effects © Patch, [pixelfx](https://github.com/patch-gg/pixelfx), MIT License.

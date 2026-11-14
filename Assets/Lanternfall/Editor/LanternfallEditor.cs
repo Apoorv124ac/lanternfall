@@ -40,7 +40,7 @@ namespace Lanternfall.EditorTools
             };
         }
 
-        [MenuItem("Lanternfall/Create Slice Scene")]
+        [MenuItem("Lanternfall/Create Game Scene")]
         public static void CreateScene()
         {
             if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
@@ -53,10 +53,26 @@ namespace Lanternfall.EditorTools
                 list.Insert(0, new EditorBuildSettingsScene(ScenePath, true));
                 EditorBuildSettings.scenes = list.ToArray();
             }
-            Debug.Log("Lanternfall: slice scene ready at " + ScenePath + ". Press Play, then A on a gamepad or J on the keyboard to join.");
+            Debug.Log("Lanternfall: game scene ready at " + ScenePath + ". Press Play, pick a hero with A/D, then Enter.");
         }
 
-        [MenuItem("Lanternfall/Open Slice Scene")]
+        [MenuItem("Lanternfall/Create Character Art Config")]
+        static void CreateArtConfig()
+        {
+            const string path = "Assets/Lanternfall/Resources/CharacterArt.asset";
+            var existing = AssetDatabase.LoadAssetAtPath<CharacterArtConfig>(path);
+            if (existing == null)
+            {
+                existing = ScriptableObject.CreateInstance<CharacterArtConfig>();
+                AssetDatabase.CreateAsset(existing, path);
+                AssetDatabase.SaveAssets();
+            }
+            Selection.activeObject = existing;
+            EditorGUIUtility.PingObject(existing);
+            Debug.Log("Lanternfall: drag rigged character prefabs into the slots of CharacterArt. Empty slots keep the built-in characters.");
+        }
+
+        [MenuItem("Lanternfall/Open Game Scene")]
         static void Open()
         {
             if (!File.Exists(ScenePath)) { CreateScene(); return; }
